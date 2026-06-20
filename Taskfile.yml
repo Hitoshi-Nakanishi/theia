@@ -1,0 +1,62 @@
+version: '3'
+
+# DATA_PATH (and any other overrides) come from .env; create one by copying
+# .env.example and pointing DATA_PATH at where you keep your prepared archive.
+dotenv: ['.env']
+
+vars:
+  # Cross-platform venv python. Mac/Linux uses .venv/bin/python; Windows uses
+  # .venv/Scripts/python.exe.
+  PY: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
+
+  # Default prepared archive opened by `task run`.
+  CANONICAL_ROOT:  '{{.DATA_PATH}}/broker_models/canonical'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  install:
+    desc: Create venv and install theia editable
+    cmds:
+      - python -m venv .venv
+      - '{{.PY}} -m pip install -U pip'
+      - '{{.PY}} -m pip install -e .'
+
+  build-cython:
+    desc: 'Compile _arrow_fast.pyx Cython extension (optional; arrow_model falls back to pure Python)'
+    cmds:
+      - '{{.PY}} -m pip install cython setuptools --quiet'
+      # Windows: use MinGW gcc (install WinLibs UCRT: `winget install
+      # BrechtSanders.WinLibs.POSIX.UCRT`, then open a new shell so gcc is on PATH).
+      - cmd: '{{.PY}} setup.py build_ext --inplace --compiler=mingw32'
+        platforms: [windows]
+      # macOS/Linux: default toolchain (clang/gcc).
+      - cmd: '{{.PY}} setup.py build_ext --inplace'
+        platforms: [darwin, linux]
+
+  run:
+    desc: 'Launch Theia on the prepared archive'
+    cmds:
+      - '{{.PY}} -m theia "{{.CANONICAL_ROOT}}"'
+
+  run-path:
+    desc: 'Launch Theia on an explicit file / folder / zip - pass with `task run-path -- <path>`'
+    cmds:
+      - '{{.PY}} -m theia {{.CLI_ARGS}}'
+
+  paths:
+    desc: 'Print the resolved DATA_PATH and derived directories'
+    cmds:
+      - '{{.PY}} -c "from theia.paths import data_path, broker_models_root, canonical_root; print(f''DATA_PATH        = {data_path()}''); print(f''broker_models    = {broker_models_root()}''); print(f''canonical_root   = {canonical_root()}'')"'
+
+  clean:
+    desc: Remove venv and build artifacts
+    cmds:
+      - cmd: rm -rf .venv theia.egg-info build dist
+        platforms: [linux, darwin]
+      - cmd: rmdir /S /Q .venv 2>NUL & rmdir /S /Q theia.egg-info 2>NUL & rmdir /S /Q build 2>NUL & rmdir /S /Q dist 2>NUL
+        platforms: [windows]
+        ignore_error: true
