@@ -5,10 +5,12 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSortFilterProxyModel, QStringListModel, QThread, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QStandardItem, QStandardItemModel
+from PySide6.QtCore import Qt, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QKeySequence, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QProgressBar,
     QSplitter,
+    QToolBar,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -24,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from theia.model import SheetModel
 from theia.table import FrozenPaneTable
+from theia.theme import THEME_ORDER, THEMES, build_stylesheet
 from theia.workbook import Source, Workbook, list_zip_xlsx
 
 try:
@@ -180,6 +184,20 @@ QMenu::separator { height: 1px; background: #eaeef2; margin: 4px 0; }
 """
 
 _SUPPORTED_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".xlsb"}
+
+
+def _setting_bool(settings: QSettings, key: str, default: bool) -> bool:
+    value = settings.value(key, default)
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _setting_theme(settings: QSettings) -> str:
+    value = str(settings.value("theme/name", "midnight"))
+    return value if value in THEMES else "midnight"
 
 # Column width bounds when auto-sizing (px)
 _MIN_COL_W = 60
@@ -453,6 +471,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Theia")
         self.resize(1500, 900)
+        self._settings = QSettings("Theia", "Theia")
+        self._theme_key = _setting_theme(self._settings)
+        self._dark_mode = _setting_bool(self._settings, "theme/dark", True)
+        self._sidebar_visible = _setting_bool(self._settings, "view/sidebar", True)
+        self._theme_combo: QComboBox | None = None
+        self._dark_toggle: QCheckBox | None = None
+        self._theme_actions: dict[str, QAction] = {}
+        self._nav_widgets: tuple[QWidget, QWidget] | None = None
+        self._splitter: QSplitter | None = None
 
         # State
         self._workbooks: dict[Source, Workbook] = {}   # source -> opened workbook (Source is hashable: Path or (Path, str))
@@ -534,6 +561,8 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(2, 1)
         splitter.setSizes([260, 200, 1040])
         splitter.setChildrenCollapsible(False)
+        self._splitter = splitter
+        self._nav_widgets = (companies_pane, sheets_pane)
         self.setCentralWidget(splitter)
 
         # ---- Menu ----
@@ -565,6 +594,27 @@ class MainWindow(QMainWindow):
         self._toggle_groups_act.setShortcut("Ctrl+Shift+G")
         self._toggle_groups_act.triggered.connect(self._toggle_groups)
 
+        self._sidebar_action = QAction("&Sidebar", self)
+        self._sidebar_action.setCheckable(True)
+        self._sidebar_action.setChecked(self._sidebar_visible)
+        self._sidebar_action.setShortcut("Ctrl+B")
+        self._sidebar_action.toggled.connect(self._set_sidebar_visible)
+
+        self._dark_action = QAction("&Dark Mode", self)
+        self._dark_action.setCheckable(True)
+        self._dark_action.setChecked(self._dark_mode)
+        self._dark_action.triggered.connect(self._set_dark_mode)
+
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        for key in THEME_ORDER:
+            act = QAction(THEMES[key]["label"], self)
+            act.setCheckable(True)
+            act.setChecked(key == self._theme_key)
+            act.triggered.connect(lambda checked=False, theme_key=key: self._set_theme(theme_key))
+            theme_group.addAction(act)
+            self._theme_actions[key] = act
+
         quit_act = QAction("&Quit", self)
         quit_act.setShortcut(QKeySequence.Quit)
         quit_act.triggered.connect(self.close)
@@ -579,10 +629,18 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_act)
 
         view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self._sidebar_action)
+        view_menu.addAction(self._dark_action)
+        theme_menu = view_menu.addMenu("&Theme")
+        for key in THEME_ORDER:
+            theme_menu.addAction(self._theme_actions[key])
+        view_menu.addSeparator()
         view_menu.addAction(freeze_at)
         view_menu.addAction(unfreeze)
         view_menu.addSeparator()
         view_menu.addAction(self._toggle_groups_act)
+
+        self._build_toolbar(open_file, open_folder)
 
         # ---- Status bar ----
         self._status = QLabel(
@@ -608,6 +666,99 @@ class MainWindow(QMainWindow):
 
         # ---- Drag & drop ----
         self.setAcceptDrops(True)
+        self._sync_theme_controls()
+        self._set_sidebar_visible(self._sidebar_visible, persist=False)
+        self._apply_theme()
+
+    # ---- Theme / view controls ----
+
+    def _build_toolbar(self, open_file: QAction, open_folder: QAction):
+        toolbar = QToolBar("Controls", self)
+        toolbar.setObjectName("main-toolbar")
+        toolbar.setMovable(False)
+        toolbar.addAction(open_file)
+        toolbar.addAction(open_folder)
+        toolbar.addSeparator()
+        toolbar.addAction(self._sidebar_action)
+        toolbar.addSeparator()
+
+        theme_label = QLabel("THEME")
+        self._theme_combo = QComboBox()
+        self._theme_combo.setMinimumWidth(132)
+        for key in THEME_ORDER:
+            self._theme_combo.addItem(THEMES[key]["label"], key)
+        self._theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
+
+        self._dark_toggle = QCheckBox("Dark")
+        self._dark_toggle.toggled.connect(self._set_dark_mode)
+
+        toolbar.addWidget(theme_label)
+        toolbar.addWidget(self._theme_combo)
+        toolbar.addWidget(self._dark_toggle)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+    def _on_theme_combo_changed(self, index: int):
+        if self._theme_combo is None:
+            return
+        key = self._theme_combo.itemData(index)
+        if key:
+            self._set_theme(str(key))
+
+    def _set_theme(self, key: str):
+        if key not in THEMES:
+            key = "midnight"
+        if self._theme_key == key:
+            self._sync_theme_controls()
+            return
+        self._theme_key = key
+        self._settings.setValue("theme/name", key)
+        self._sync_theme_controls()
+        self._apply_theme()
+
+    def _set_dark_mode(self, enabled: bool):
+        enabled = bool(enabled)
+        if self._dark_mode == enabled:
+            self._sync_theme_controls()
+            return
+        self._dark_mode = enabled
+        self._settings.setValue("theme/dark", enabled)
+        self._sync_theme_controls()
+        self._apply_theme()
+
+    def _set_sidebar_visible(self, visible: bool, persist: bool = True):
+        self._sidebar_visible = bool(visible)
+        if persist:
+            self._settings.setValue("view/sidebar", self._sidebar_visible)
+        if self._nav_widgets is not None:
+            for widget in self._nav_widgets:
+                widget.setVisible(self._sidebar_visible)
+        if self._splitter is not None and self._sidebar_visible:
+            sizes = self._splitter.sizes()
+            if len(sizes) >= 3 and sizes[0] == 0 and sizes[1] == 0:
+                self._splitter.setSizes([260, 200, max(700, sizes[2])])
+        if hasattr(self, "_sidebar_action"):
+            with QSignalBlocker(self._sidebar_action):
+                self._sidebar_action.setChecked(self._sidebar_visible)
+
+    def _sync_theme_controls(self):
+        if self._theme_combo is not None:
+            idx = self._theme_combo.findData(self._theme_key)
+            with QSignalBlocker(self._theme_combo):
+                self._theme_combo.setCurrentIndex(max(idx, 0))
+        if self._dark_toggle is not None:
+            with QSignalBlocker(self._dark_toggle):
+                self._dark_toggle.setChecked(self._dark_mode)
+        if hasattr(self, "_dark_action"):
+            with QSignalBlocker(self._dark_action):
+                self._dark_action.setChecked(self._dark_mode)
+        for key, action in self._theme_actions.items():
+            with QSignalBlocker(action):
+                action.setChecked(key == self._theme_key)
+
+    def _apply_theme(self):
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_stylesheet(self._theme_key, self._dark_mode))
 
     # ---- Public open API ----
 
@@ -622,7 +773,8 @@ class MainWindow(QMainWindow):
             self.open_file(path)
 
     def open_file(self, path: Path):
-        self._populate([("(local)", "(file)", path.stem, path)], root_label=str(path), skipped=0)
+        label = _jp_label(path.stem) or path.stem
+        self._populate([("(local)", "(file)", label, path)], root_label=str(path), skipped=0)
         self.setWindowTitle(f"{path.name} — Theia")
 
     def open_folder(self, folder: Path):
@@ -1091,11 +1243,12 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Theia")
     app.setStyle("Fusion")
-    app.setStyleSheet(STYLE)
+    app.setStyleSheet(build_stylesheet("midnight", True))
 
-    font: QFont = app.font()
-    if font.pointSize() > 0:
-        font.setPointSize(max(9, font.pointSize() - 1))
+    font: QFont = QFont("Arial")
+    default_size = app.font().pointSize()
+    if default_size > 0:
+        font.setPointSize(max(9, default_size - 1))
     app.setFont(font)
 
     w = MainWindow()

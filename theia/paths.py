@@ -11,7 +11,7 @@ value comes from (in order):
 Standard layout under ``$DATA_PATH``::
 
     broker_models/
-      canonical/<source>/<analyst>/<ticker>.T_<name>.xlsx (+ optional sidecars)
+      canonical/<broker>/<analyst>/<ticker>.T_<name>.xlsx (+ optional sidecars)
 """
 
 from __future__ import annotations

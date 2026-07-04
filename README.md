@@ -5,7 +5,10 @@
 
 Theia is a fast local desktop viewer for Excel valuation models. It opens a
 single workbook, a folder, a zip, or a prepared archive and lets you move between
-sources, analysts, companies, and sheets without launching Excel.
+`<broker>` labels, analyst buckets, companies, and sheets without launching
+Excel.
+
+![Theia test screen](docs/assets/theia-screenshot.png)
 
 The public repository is intentionally the viewer only. Source-specific cleanup,
 normalization, and export handling should live outside tracked files, for
@@ -44,13 +47,42 @@ The viewer accepts drag-and-drop of files, zips, or folders.
 
 ## Features
 
-- Browse an archive through a three-level tree: source -> analyst -> company.
+- Browse an archive through a three-level tree: `<broker>` -> `<analyst>` -> company.
 - Open a single Excel file, a folder, or a zip by menu, CLI argument, or drag-and-drop.
+- Switch between Midnight, Aurora, and Ember themes, with light and dark modes.
+- Toggle the navigation sidebar when the table needs the full window width.
 - Load pre-formatted `.arrow` sidecars when present for near-instant sheet display.
 - Render Excel-style number formats from sidecar metadata when available.
 - Preserve hidden rows/columns, merged cells, freeze panes, and outline groups.
 - Use background preloading and an LRU cache so switching companies and sheets stays fast.
 - Optionally compile a small Cython extension, with a pure-Python fallback.
+
+## Demo Workbook
+
+The repository includes an anonymized workbook for smoke tests and README
+screenshots:
+
+```sh
+task run-path -- examples/demo_models/0000.T_Demo_Model.xlsx
+```
+
+The workbook and sidecar use fictional labels only. They do not contain broker
+names, analyst names, client identifiers, or real holdings.
+
+## Performance Snapshot
+
+The numbers below are from a local smoke run against the demo workbook on
+2026-07-04. They are intended as a repeatable baseline for this repository, not
+as production-archive performance claims.
+
+| Metric | Result |
+|---|---:|
+| Workbook size | 7,337 bytes |
+| Sheets / rows / populated cells | 4 / 46 / 248 |
+| Calamine workbook open, median / p95 | 0.15 ms / 0.29 ms |
+| Read every visible sheet, median / p95 | 0.22 ms / 0.34 ms |
+| Theia sheet display, median | 0.20 ms |
+| Measurement runs | 30 |
 
 ## Private Cleanup
 
@@ -72,7 +104,7 @@ By default, `task run` opens this prepared archive under `$DATA_PATH`:
 $DATA_PATH/
 `-- broker_models/
     `-- canonical/
-        `-- <source>/
+        `-- <broker>/
             `-- <analyst>/
                 |-- <code>.T_<name>.xlsx
                 |-- <code>.T_<name>.json
@@ -89,6 +121,7 @@ zip directly.
 |---|---|
 | `Ctrl+O` | Open file or zip |
 | `Ctrl+Shift+O` | Open folder |
+| `Ctrl+B` | Toggle sidebar |
 | `Ctrl+L` | Focus the companies filter |
 | `Ctrl+Shift+L` | Focus the sheets filter |
 | `Ctrl+Shift+F` | Freeze panes at the current cell |
@@ -124,10 +157,11 @@ task build-cython
 
 ```text
 theia/
-|-- app.py          # MainWindow, open file/folder/zip, source -> analyst -> company tree
+|-- app.py          # MainWindow, open file/folder/zip, <broker> -> <analyst> -> company tree
 |-- table.py        # FrozenPaneTable, keyboard navigation, fast delegate
 |-- model.py        # SheetModel and Excel number-format parser
 |-- arrow_model.py  # ArrowSheetModel backed by a memory-mapped Arrow RecordBatch
+|-- theme.py        # Theme palettes and Qt stylesheet generation
 |-- _arrow_fast.pyx # optional Cython hot path
 |-- workbook.py     # lazy CalamineWorkbook wrapper
 `-- paths.py        # DATA_PATH and archive path resolution
@@ -140,7 +174,7 @@ Local private cleanup code belongs in `private_models/`, which is gitignored.
 Theia is designed so a public checkout carries no proprietary information:
 
 - It reads only local files and uploads nothing.
-- Source labels and analyst buckets are derived from local folder names.
+- `<broker>` labels and analyst buckets are derived from local folder names.
 - `.env`, `private_models/`, and build artifacts are gitignored.
 
 ## Name
