@@ -44,6 +44,7 @@ from theia.model import (
 
 
 _FLAT_CELL_LIMIT = 0
+_LAZY_CELL_CACHE_MAX = 32_768
 
 
 class ArrowSheetModel(QAbstractTableModel):
@@ -86,12 +87,16 @@ class ArrowSheetModel(QAbstractTableModel):
         self._batch = None
         self._v_cols: list | None = None
         self._v_flat: list | None = None
+        self._display_cache: dict[int, str] | None = None
+        self._negative_cache: dict[int, bool] | None = None
         if n_rows * n_cols <= _FLAT_CELL_LIMIT:
             cols = [batch.column(f"v_{c}").to_pylist() for c in range(n_cols)]
             self._v_flat = _build_v_flat(cols, n_rows, n_cols)
         else:
             self._batch = batch
             self._v_cols = [batch.column(f"v_{c}") for c in range(n_cols)]
+            self._display_cache = {}
+            self._negative_cache = {}
 
         # Keep per-column neg markers. Eager sheets use Python lists; lazy
         # sheets keep Arrow arrays and read only cells being painted.
@@ -114,15 +119,35 @@ class ArrowSheetModel(QAbstractTableModel):
         if self._v_flat is not None:
             return _get_display(self._v_flat, r, c, self._n_cols)
         assert self._v_cols is not None
+        assert self._display_cache is not None
+        key = r * self._n_cols + c
+        cached = self._display_cache.get(key)
+        if cached is not None:
+            return cached
         v = self._v_cols[c][r].as_py()
-        return v if v else ""
+        result = v if v else ""
+        if len(self._display_cache) >= _LAZY_CELL_CACHE_MAX:
+            self._display_cache.clear()
+        self._display_cache[key] = result
+        return result
 
     def _is_negative(self, r: int, c: int) -> bool:
         neg_list = self._neg.get(c)
         if neg_list is not None:
             return bool(neg_list[r])
         neg_array = self._neg_arrays.get(c)
-        return bool(neg_array is not None and neg_array[r].as_py())
+        if neg_array is None:
+            return False
+        assert self._negative_cache is not None
+        key = r * self._n_cols + c
+        cached = self._negative_cache.get(key)
+        if cached is not None:
+            return cached
+        result = bool(neg_array[r].as_py())
+        if len(self._negative_cache) >= _LAZY_CELL_CACHE_MAX:
+            self._negative_cache.clear()
+        self._negative_cache[key] = result
+        return result
 
     # ---- QAbstractTableModel interface ----
 
