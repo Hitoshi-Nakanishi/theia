@@ -5,7 +5,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal
+from PySide6.QtCore import Qt, QSize, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QKeySequence, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
     QListView,
     QMainWindow,
     QProgressBar,
+    QSizePolicy,
     QSplitter,
+    QStyle,
     QToolBar,
     QTreeView,
     QVBoxLayout,
@@ -523,6 +525,7 @@ class MainWindow(QMainWindow):
         self.company_filter.textChanged.connect(self._on_companies_filter_changed)
 
         companies_pane = QWidget()
+        companies_pane.setObjectName("nav-pane")
         cp_outer = QVBoxLayout(companies_pane)
         cp_outer.setContentsMargins(0, 0, 0, 0)
         cp_outer.setSpacing(0)
@@ -545,6 +548,7 @@ class MainWindow(QMainWindow):
             self._sheets_model,
             self._sheets_proxy,
         ) = _make_pane("Filter sheets…", title="Sheets")
+        sheets_pane.setObjectName("nav-pane")
         self.sheet_list.selectionModel().currentChanged.connect(self._on_sheet_selected)
 
         # ---- Table ---- (4-view composite with Excel-style freeze panes)
@@ -567,10 +571,12 @@ class MainWindow(QMainWindow):
 
         # ---- Menu ----
         open_file = QAction("Open &File…", self)
+        open_file.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         open_file.setShortcut(QKeySequence.Open)
         open_file.triggered.connect(self._open_file_dialog)
 
         open_folder = QAction("Open F&older…", self)
+        open_folder.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
         open_folder.setShortcut("Ctrl+Shift+O")
         open_folder.triggered.connect(self._open_folder_dialog)
 
@@ -676,20 +682,27 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Controls", self)
         toolbar.setObjectName("main-toolbar")
         toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(16, 16))
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.addAction(open_file)
         toolbar.addAction(open_folder)
-        toolbar.addSeparator()
-        toolbar.addAction(self._sidebar_action)
-        toolbar.addSeparator()
 
-        theme_label = QLabel("THEME")
+        spacer = QWidget()
+        spacer.setObjectName("toolbar-spacer")
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+
+        theme_label = QLabel("Theme")
+        theme_label.setObjectName("toolbar-label")
         self._theme_combo = QComboBox()
         self._theme_combo.setMinimumWidth(132)
+        self._theme_combo.setObjectName("theme-combo")
         for key in THEME_ORDER:
             self._theme_combo.addItem(THEMES[key]["label"], key)
         self._theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
 
         self._dark_toggle = QCheckBox("Dark")
+        self._dark_toggle.setObjectName("dark-toggle")
         self._dark_toggle.toggled.connect(self._set_dark_mode)
 
         toolbar.addWidget(theme_label)
@@ -1098,6 +1111,7 @@ class MainWindow(QMainWindow):
         )
 
     _CHAR_PX = 7  # approx px per character at 12-13px Segoe UI
+    _OVERFLOW_TEXT_MIN_CHARS = 24
 
     def _apply_model_to_table(self, model, merged_cells, group_rows_0, group_cols_0, cache_key):
         """③ Swap in a new model while suppressing intermediate viewport repaints."""
@@ -1153,6 +1167,10 @@ class MainWindow(QMainWindow):
             for r in range(sample_n):
                 v = model.raw_value(r, c)
                 if v is not None:
+                    if self._is_repeated_merged_text(model, r, c, v):
+                        continue
+                    if self._is_overflow_width_candidate(model, r, c, v):
+                        continue
                     s = v if isinstance(v, str) else str(v)
                     if s:
                         max_len = max(max_len, len(s))
@@ -1160,6 +1178,22 @@ class MainWindow(QMainWindow):
             widths.append(w)
         self._col_width_cache[cache_key] = widths
         self.table.setColumnWidths(widths)
+
+    def _is_overflow_width_candidate(self, model, row: int, col: int, value) -> bool:
+        if not isinstance(value, str):
+            return False
+        text = value.strip()
+        if len(text) < self._OVERFLOW_TEXT_MIN_CHARS or "\n" in text:
+            return False
+        if col + 1 >= model.columnCount():
+            return False
+        right = model.raw_value(row, col + 1)
+        return right is None or right == ""
+
+    def _is_repeated_merged_text(self, model, row: int, col: int, value) -> bool:
+        if col <= 0 or not isinstance(value, str) or value == "":
+            return False
+        return model.raw_value(row, col - 1) == value
 
     def _try_load_arrow(self, wb_path: Path, sheet_name: str):
         """Open a pre-formatted .arrow sidecar for the given sheet, or return None.

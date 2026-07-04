@@ -46,19 +46,19 @@ THEMES: dict[str, Theme] = {
             "disabled_fg": "#9aa6b8",
         },
         "dark": {
-            "bg": "#070b12",
-            "surface": "#101724",
-            "surface_2": "#151f31",
-            "border": "#243349",
-            "text": "#edf4ff",
-            "muted": "#91a0b8",
-            "accent": "#3b82f6",
-            "accent_dark": "#2563eb",
-            "accent_soft": "#172554",
+            "bg": "#0b0d10",
+            "surface": "#11151a",
+            "surface_2": "#171d24",
+            "border": "#29313b",
+            "text": "#f4f7fb",
+            "muted": "#9ba8b7",
+            "accent": "#4f8cff",
+            "accent_dark": "#2f6fe4",
+            "accent_soft": "#17304f",
             "danger": "#fb7185",
             "ok": "#34d399",
-            "disabled_bg": "#1b2535",
-            "disabled_fg": "#66758c",
+            "disabled_bg": "#1b222b",
+            "disabled_fg": "#657283",
         },
     },
     "aurora": {
@@ -129,9 +129,6 @@ THEMES: dict[str, Theme] = {
     },
 }
 
-THEME_LABELS = {value["label"]: key for key, value in THEMES.items()}
-
-
 def palette_for(theme: str, dark_mode: bool) -> Palette:
     theme_key = theme if theme in THEMES else "midnight"
     mode = "dark" if dark_mode else "light"
@@ -147,53 +144,74 @@ QMainWindow, QWidget {{
     color: {p["text"]};
     font-family: Arial;
 }}
-QToolBar {{
+QToolBar#main-toolbar {{
     background: {p["surface"]};
     border: none;
     border-bottom: 1px solid {p["border"]};
-    spacing: 8px;
-    padding: 7px 10px;
+    spacing: 6px;
+    padding: 8px 10px;
 }}
-QToolBar QLabel {{
+QToolBar#main-toolbar QWidget#toolbar-spacer {{
+    background: transparent;
+}}
+QToolBar#main-toolbar QLabel#toolbar-label {{
     background: transparent;
     color: {p["muted"]};
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 0 2px 0 8px;
 }}
 QToolButton {{
-    background: {p["surface_2"]};
-    border: 1px solid {p["border"]};
+    background: transparent;
+    border: 1px solid transparent;
     border-radius: 6px;
     color: {p["text"]};
-    padding: 5px 9px;
+    padding: 6px 10px;
+    font-size: 12px;
 }}
-QToolButton:hover {{ border-color: {p["accent"]}; color: {p["accent"]}; }}
+QToolButton:hover {{
+    background: {p["surface_2"]};
+    border-color: {p["border"]};
+}}
+QToolButton:pressed {{
+    background: {p["accent_soft"]};
+    border-color: {p["accent"]};
+}}
 QToolButton:checked {{ background: {p["accent"]}; color: {selected_text}; border-color: {p["accent"]}; }}
 QComboBox, QLineEdit {{
-    padding: 6px 10px;
+    padding: 7px 10px;
     border: 1px solid {p["border"]};
     border-radius: 6px;
-    background: {p["surface"]};
+    background: {p["surface_2"]};
     color: {p["text"]};
     selection-background-color: {p["accent"]};
     selection-color: {selected_text};
-    font-size: 13px;
+    font-size: 12px;
 }}
 QComboBox:focus, QLineEdit:focus {{ border-color: {p["accent"]}; }}
-QComboBox::drop-down {{ width: 20px; border: none; }}
+QComboBox::drop-down {{ width: 22px; border: none; }}
+QComboBox QAbstractItemView {{
+    background: {p["surface"]};
+    color: {p["text"]};
+    border: 1px solid {p["border"]};
+    selection-background-color: {p["accent"]};
+    selection-color: {selected_text};
+}}
 QCheckBox {{
     color: {p["text"]};
     spacing: 6px;
     background: transparent;
+    font-size: 12px;
 }}
-QCheckBox::indicator {{
-    width: 34px;
-    height: 18px;
-    border-radius: 9px;
+QCheckBox#dark-toggle::indicator {{
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
     border: 1px solid {p["border"]};
     background: {p["surface_2"]};
 }}
-QCheckBox::indicator:checked {{
+QCheckBox#dark-toggle::indicator:hover {{ border-color: {p["accent"]}; }}
+QCheckBox#dark-toggle::indicator:checked {{
     background: {p["accent"]};
     border-color: {p["accent"]};
 }}
@@ -201,20 +219,24 @@ QSplitter::handle {{ background: {p["border"]}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 QSplitter::handle:vertical {{ height: 1px; }}
 QLabel#section-header {{
-    background: {p["bg"]};
+    background: {p["surface"]};
     color: {p["muted"]};
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0;
-    padding: 10px 12px 5px 12px;
+    padding: 12px 12px 6px 12px;
     border-bottom: 1px solid {p["border"]};
+}}
+QWidget#nav-pane {{
+    background: {p["surface"]};
+    border-right: 1px solid {p["border"]};
 }}
 QTreeView, QListView {{
     border: none;
-    background: {p["bg"]};
+    background: {p["surface"]};
     color: {p["text"]};
     padding: 4px;
-    font-size: 13px;
+    font-size: 12px;
     outline: 0;
 }}
 QTreeView::item, QListView::item {{
@@ -227,9 +249,9 @@ QTreeView::item:selected, QListView::item:selected {{
     background: {p["accent"]};
     color: {selected_text};
 }}
-QTreeView::branch {{ background: {p["bg"]}; }}
+QTreeView::branch {{ background: {p["surface"]}; }}
 QTableView {{
-    background: {p["surface"]};
+    background: {p["bg"]};
     alternate-background-color: {p["surface_2"]};
     color: {p["text"]};
     gridline-color: {p["border"]};
@@ -239,9 +261,9 @@ QTableView {{
     font-size: 12px;
 }}
 QHeaderView::section {{
-    background: {p["surface_2"]};
+    background: {p["surface"]};
     color: {p["muted"]};
-    padding: 5px 8px;
+    padding: 6px 8px;
     border: none;
     border-right: 1px solid {p["border"]};
     border-bottom: 1px solid {p["border"]};

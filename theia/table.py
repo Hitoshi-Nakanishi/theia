@@ -3,7 +3,7 @@
 
 import re
 
-from PySide6.QtCore import QItemSelection, QItemSelectionModel, Qt
+from PySide6.QtCore import QItemSelection, QItemSelectionModel, QRect, Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QFrame, QGridLayout, QHeaderView, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QWidget
 
@@ -57,6 +57,8 @@ class _FastCellDelegate(QStyledItemDelegate):
     _SEL   = QStyle.StateFlag.State_Selected
     _ALT   = QStyleOptionViewItem.ViewItemFeature.Alternate
     _ready = False   # set to True after first paint warms up the constants
+    _OVERFLOW_TEXT_MIN_CHARS = 24
+    _OVERFLOW_MAX_COLS = 6
 
     def paint(self, painter, option, index):
         if not self._ready:
@@ -64,6 +66,10 @@ class _FastCellDelegate(QStyledItemDelegate):
             _FastCellDelegate._ready = True
         model = index.model()
         if not hasattr(model, "_display_at"):
+            if self._paint_overflow_source(painter, option, index):
+                return
+            if self._paint_overflow_continuation(painter, option, index):
+                return
             super().paint(painter, option, index)
             return
 
@@ -88,6 +94,8 @@ class _FastCellDelegate(QStyledItemDelegate):
             painter.fillRect(rect, option.palette.base())
 
         if not text:
+            if self._draw_left_overflow_text(painter, option, model, r, c, selected):
+                return
             return
 
         # ---- Font ----
@@ -109,6 +117,131 @@ class _FastCellDelegate(QStyledItemDelegate):
         # ---- Text ----
         align = _CELL_ALIGN_RIGHT if c in model._numeric_cols else _CELL_ALIGN_LEFT
         painter.drawText(rect.adjusted(3, 1, -3, -1), align, text)
+
+    def _paint_overflow_source(self, painter, option, index) -> bool:
+        model = index.model()
+        if not hasattr(model, "raw_value"):
+            return False
+        row, col = index.row(), index.column()
+        value = model.raw_value(row, col)
+        if not self._is_overflow_candidate(model, row, col, value):
+            return False
+
+        clean_option = QStyleOptionViewItem(option)
+        self.initStyleOption(clean_option, index)
+        clean_option.text = ""
+        super().paint(painter, clean_option, index)
+
+        text = model.data(index, Qt.DisplayRole) or ""
+        self._draw_overflow_text(
+            painter,
+            option,
+            text,
+            self._overflow_rect(option, model, row, col),
+            bool(option.state & self._SEL),
+        )
+        return True
+
+    def _paint_overflow_continuation(self, painter, option, index) -> bool:
+        model = index.model()
+        if not hasattr(model, "raw_value"):
+            return False
+        row, col = index.row(), index.column()
+        if not self._is_empty(model.raw_value(row, col)):
+            return False
+        source_col = self._left_overflow_source(model, row, col)
+        if source_col is None:
+            return False
+
+        clean_option = QStyleOptionViewItem(option)
+        self.initStyleOption(clean_option, index)
+        clean_option.text = ""
+        super().paint(painter, clean_option, index)
+
+        text = model.data(model.index(row, source_col), Qt.DisplayRole) or ""
+        self._draw_overflow_text(
+            painter,
+            option,
+            text,
+            self._overflow_rect(option, model, row, source_col),
+            bool(option.state & self._SEL),
+        )
+        return True
+
+    def _draw_left_overflow_text(self, painter, option, model, row: int, col: int, selected) -> bool:
+        if not hasattr(model, "raw_value"):
+            return False
+        source_col = self._left_overflow_source(model, row, col)
+        if source_col is None:
+            return False
+        if hasattr(model, "_display_at"):
+            text = model._display_at(row, source_col)
+        else:
+            text = model.data(model.index(row, source_col), Qt.DisplayRole) or ""
+        self._draw_overflow_text(
+            painter,
+            option,
+            text,
+            self._overflow_rect(option, model, row, source_col),
+            bool(selected),
+        )
+        return True
+
+    def _draw_overflow_text(self, painter, option, text: str, text_rect, selected: bool):
+        if not text:
+            return
+        painter.save()
+        painter.setClipRect(option.rect)
+        painter.setFont(_normal_font())
+        if selected:
+            painter.setPen(option.palette.highlightedText().color())
+        else:
+            painter.setPen(option.palette.text().color())
+        painter.drawText(text_rect.adjusted(3, 1, -3, -1), _CELL_ALIGN_LEFT, text)
+        painter.restore()
+
+    def _left_overflow_source(self, model, row: int, col: int) -> int | None:
+        start = max(0, col - self._OVERFLOW_MAX_COLS)
+        for source_col in range(col - 1, start - 1, -1):
+            value = model.raw_value(row, source_col)
+            if self._is_empty(value):
+                continue
+            if self._is_overflow_candidate(model, row, source_col, value, target_col=col):
+                return source_col
+            return None
+        return None
+
+    def _is_overflow_candidate(self, model, row: int, source_col: int, value, *, target_col: int | None = None) -> bool:
+        if not isinstance(value, str):
+            return False
+        text = value.strip()
+        if len(text) < self._OVERFLOW_TEXT_MIN_CHARS or "\n" in text:
+            return False
+        end_col = target_col if target_col is not None else min(model.columnCount() - 1, source_col + 1)
+        if end_col <= source_col:
+            return False
+        for col in range(source_col + 1, end_col + 1):
+            if not self._is_empty(model.raw_value(row, col)):
+                return False
+        return True
+
+    def _overflow_rect(self, option, model, row: int, source_col: int):
+        view = option.widget
+        if view is None:
+            return option.rect
+        left = view.columnViewportPosition(source_col)
+        right = left + view.columnWidth(source_col)
+        last_col = min(model.columnCount() - 1, source_col + self._OVERFLOW_MAX_COLS)
+        for col in range(source_col + 1, last_col + 1):
+            if not self._is_empty(model.raw_value(row, col)):
+                break
+            col_left = view.columnViewportPosition(col)
+            right = max(right, col_left + view.columnWidth(col))
+        return QRect(left, option.rect.top(), max(0, right - left), option.rect.height())
+
+    @staticmethod
+    def _is_empty(value) -> bool:
+        return value is None or value == ""
 
 
 def _col_letter_to_index(letter: str) -> int:
