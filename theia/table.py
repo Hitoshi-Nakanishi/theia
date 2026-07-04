@@ -50,7 +50,7 @@ class _FastCellDelegate(QStyledItemDelegate):
 
     Bypasses Qt's 5-role-per-cell query protocol entirely for ArrowSheetModel:
     background, foreground, font, alignment, and text are all resolved in one
-    Python call with direct list indexing — zero extra model.data() queries.
+    Python call through the model's fast helpers.
     Falls back to QStyledItemDelegate for SheetModel or any other model type.
     """
 
@@ -63,13 +63,16 @@ class _FastCellDelegate(QStyledItemDelegate):
             _init_cell_style_consts()
             _FastCellDelegate._ready = True
         model = index.model()
-        if not hasattr(model, "_v_flat"):
+        if not hasattr(model, "_display_at"):
             super().paint(painter, option, index)
             return
 
         r = index.row()
         c = index.column()
-        text = model._v_flat[r * model._n_cols + c] or ""
+        if getattr(model, "_v_flat", None) is not None:
+            text = model._v_flat[r * model._n_cols + c] or ""
+        else:
+            text = model._display_at(r, c)
         is_hidden = model._row_hidden[r] or model._col_hidden[c]
         selected = option.state & self._SEL
         rect = option.rect
@@ -96,8 +99,7 @@ class _FastCellDelegate(QStyledItemDelegate):
         elif is_hidden:
             painter.setPen(_HIDDEN_FG_COLOR)
         elif c in model._numeric_cols:
-            neg_list = model._neg.get(c)
-            if neg_list is not None and neg_list[r]:
+            if model._is_negative(r, c):
                 painter.setPen(_CELL_NUM_COLOR_NEG)
             else:
                 painter.setPen(option.palette.text().color())

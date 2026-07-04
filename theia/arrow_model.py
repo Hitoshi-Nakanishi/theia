@@ -43,12 +43,16 @@ from theia.model import (
 )
 
 
+_FLAT_CELL_LIMIT = 0
+
+
 class ArrowSheetModel(QAbstractTableModel):
     """QAbstractTableModel backed by a memory-mapped PyArrow RecordBatch.
 
     All display values are pre-formatted strings stored in the Arrow file.
-    At load time the Arrow arrays are eagerly converted to Python lists so
-    data() is plain list indexing with zero Arrow overhead per call.
+    Sheets keep Arrow arrays and read cells lazily, avoiding a full Python
+    object expansion at sheet-load time. The flat-list path remains available
+    for local profiling by raising _FLAT_CELL_LIMIT.
     """
 
     def __init__(self, batch: pa.RecordBatch):
@@ -74,23 +78,51 @@ class ArrowSheetModel(QAbstractTableModel):
         col_widths_raw = _j(b"col_widths", [])
         self.col_widths: list[int] | None = col_widths_raw if col_widths_raw else None
 
-        # Convert Arrow arrays → flat row-major Python list for single-index access.
-        # _v_flat[r * n_cols + c] replaces _v[c][r] (2-level list → 1-level list).
-        # _build_v_flat uses Cython C-int arithmetic when the extension is compiled.
-        names = batch.schema.names
+        # Default to Arrow-backed lazy access; building a Python list for every
+        # cell dominates all-model load time while the UI only needs viewport
+        # cells. Raise _FLAT_CELL_LIMIT locally to profile the old flat path.
+        names = set(batch.schema.names)
         n_rows, n_cols = self._n_rows, self._n_cols
-        cols = [batch.column(f"v_{c}").to_pylist() for c in range(n_cols)]
-        self._v_flat: list = _build_v_flat(cols, n_rows, n_cols)
-        # Keep per-column neg lists (column-major is fine for neg; accessed by column)
+        self._batch = None
+        self._v_cols: list | None = None
+        self._v_flat: list | None = None
+        if n_rows * n_cols <= _FLAT_CELL_LIMIT:
+            cols = [batch.column(f"v_{c}").to_pylist() for c in range(n_cols)]
+            self._v_flat = _build_v_flat(cols, n_rows, n_cols)
+        else:
+            self._batch = batch
+            self._v_cols = [batch.column(f"v_{c}") for c in range(n_cols)]
+
+        # Keep per-column neg markers. Eager sheets use Python lists; lazy
+        # sheets keep Arrow arrays and read only cells being painted.
         self._neg: dict[int, list] = {}
+        self._neg_arrays: dict[int, pa.Array] = {}
         for ci in self._numeric_cols:
             n_name = f"n_{ci}"
             if n_name in names:
-                self._neg[ci] = batch.column(n_name).to_pylist()
+                neg_col = batch.column(n_name)
+                if self._v_flat is not None:
+                    self._neg[ci] = neg_col.to_pylist()
+                else:
+                    self._neg_arrays[ci] = neg_col
 
         # Pre-compute hidden bool lists so data() does list[r] not set-lookup
         self._row_hidden: list[bool] = [((r + 1) in self.hidden_rows) for r in range(n_rows)]
         self._col_hidden: list[bool] = [((c + 1) in self.hidden_cols) for c in range(n_cols)]
+
+    def _display_at(self, r: int, c: int) -> str:
+        if self._v_flat is not None:
+            return _get_display(self._v_flat, r, c, self._n_cols)
+        assert self._v_cols is not None
+        v = self._v_cols[c][r].as_py()
+        return v if v else ""
+
+    def _is_negative(self, r: int, c: int) -> bool:
+        neg_list = self._neg.get(c)
+        if neg_list is not None:
+            return bool(neg_list[r])
+        neg_array = self._neg_arrays.get(c)
+        return bool(neg_array is not None and neg_array[r].as_py())
 
     # ---- QAbstractTableModel interface ----
 
@@ -105,7 +137,7 @@ class ArrowSheetModel(QAbstractTableModel):
         r, c = index.row(), index.column()
 
         if role == Qt.DisplayRole:
-            return _get_display(self._v_flat, r, c, self._n_cols)
+            return self._display_at(r, c)
 
         is_hidden = self._row_hidden[r] or self._col_hidden[c]
         if role == Qt.BackgroundRole and is_hidden:
@@ -113,8 +145,7 @@ class ArrowSheetModel(QAbstractTableModel):
         if role == Qt.ForegroundRole:
             if is_hidden:
                 return _HIDDEN_FG
-            neg_list = self._neg.get(c)
-            if neg_list is not None and neg_list[r]:
+            if self._is_negative(r, c):
                 return _NUM_COLOR_NEG
         if role == Qt.FontRole and is_hidden:
             return _hidden_font()
@@ -125,7 +156,7 @@ class ArrowSheetModel(QAbstractTableModel):
     def raw_value(self, r: int, c: int):
         """Return the pre-formatted display string — used by _autosize_columns."""
         if 0 <= r < self._n_rows and 0 <= c < self._n_cols:
-            return self._v_flat[r * self._n_cols + c]
+            return self._display_at(r, c)
         return None
 
     def headerData(self, section: int, orientation, role: int = Qt.DisplayRole):
