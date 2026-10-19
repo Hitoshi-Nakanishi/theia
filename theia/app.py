@@ -5,7 +5,7 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal
+from PySide6.QtCore import Qt, QSize, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal, QItemSelectionModel
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QKeySequence, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
@@ -27,7 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from theia.model import SheetModel
+from theia.compare import ComparisonDialog, Metric
+from theia.model import SheetModel, _col_letter
 from theia.table import FrozenPaneTable
 from theia.theme import THEME_ORDER, THEMES, build_stylesheet
 from theia.workbook import Source, Workbook, list_zip_xlsx
@@ -228,13 +229,13 @@ _HIDDEN_SHEET_PATTERNS = (
 )
 
 # Maximum number of files kept in the preload cache (LRU eviction)
-_PRELOAD_CACHE_MAXSIZE = 30
+_PRELOAD_CACHE_MAXSIZE = 3
 
 # Maximum number of sheet model entries kept in the sheet model cache (LRU eviction)
-_SHEET_MODEL_CACHE_MAXSIZE = 60
+_SHEET_MODEL_CACHE_MAXSIZE = 12
 
 # Maximum number of paths sent to the preload worker per folder load
-_PRELOAD_MAX_FILES = 30
+_PRELOAD_MAX_FILES = 3
 
 
 def _lru_get(cache: OrderedDict, key):
@@ -361,12 +362,7 @@ _PRELOAD_MAX_ROWS = 200_000   # skip files above this total-row count (outlier g
 
 
 class _PreloadWorker(QThread):
-    """Background thread: walk a list of .xlsx paths and load all visible
-    sheets into a shared cache dict so clicks are instant once it finishes.
-
-    Files whose total row count exceeds _PRELOAD_MAX_ROWS are skipped from the
-    cache (they will be loaded on demand from disk when first clicked).
-    """
+    """Warm the first visible sheet of a few small workbooks."""
 
     file_done = Signal(str, float, int, int)  # path, ms, n_sheets, n_rows
     all_done  = Signal(int, int, float)        # n_total, n_loaded, total_ms
@@ -385,15 +381,19 @@ class _PreloadWorker(QThread):
                 break
             t0 = time.perf_counter()
             try:
-                cal = CalamineWorkbook.from_path(str(path))
                 sheet_data: dict = {}
                 n_rows = 0
-                for name in cal.sheet_names:
-                    if _is_hidden_sheet(name):
-                        continue
-                    rows = cal.get_sheet_by_name(name).to_python()
-                    sheet_data[name] = rows
-                    n_rows += len(rows)
+                with CalamineWorkbook.from_path(str(path)) as cal:
+                    for name in cal.sheet_names:
+                        if _is_hidden_sheet(name):
+                            continue
+                        sheet = cal.get_sheet_by_name(name)
+                        if sheet.height * sheet.width > 200_000:
+                            break
+                        rows = sheet.to_python(skip_empty_area=False)
+                        sheet_data[name] = rows
+                        n_rows += len(rows)
+                        break
                 if n_rows > _PRELOAD_MAX_ROWS:
                     # Too large to cache — will be loaded on demand.
                     elapsed = (time.perf_counter() - t0) * 1000
@@ -484,9 +484,11 @@ class MainWindow(QMainWindow):
         self._splitter: QSplitter | None = None
 
         # State
-        self._workbooks: dict[Source, Workbook] = {}   # source -> opened workbook (Source is hashable: Path or (Path, str))
+        self._workbooks: OrderedDict[Source, Workbook] = OrderedDict()
         self._current_wb: Workbook | None = None
         self._current_label: str | None = None
+        self._current_source: Source | None = None
+        self._comparison_dialogs: list[ComparisonDialog] = []
 
         # Preload cache: Path -> {sheet_name -> list[list]} populated by _PreloadWorker.
         # LRU OrderedDict bounded to _PRELOAD_CACHE_MAXSIZE files.
@@ -580,6 +582,10 @@ class MainWindow(QMainWindow):
         open_folder.setShortcut("Ctrl+Shift+O")
         open_folder.triggered.connect(self._open_folder_dialog)
 
+        self._compare_action = QAction("&Compare Selected Cells…", self)
+        self._compare_action.setShortcut("Ctrl+Shift+C")
+        self._compare_action.triggered.connect(self._compare_selected)
+
         focus_company = QAction("Focus &Companies Filter", self)
         focus_company.setShortcut("Ctrl+L")
         focus_company.triggered.connect(lambda: (self.company_filter.setFocus(), self.company_filter.selectAll()))
@@ -646,6 +652,9 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self._toggle_groups_act)
 
+        compare_menu = self.menuBar().addMenu("&Compare")
+        compare_menu.addAction(self._compare_action)
+
         self._build_toolbar(open_file, open_folder)
 
         # ---- Status bar ----
@@ -686,6 +695,7 @@ class MainWindow(QMainWindow):
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         toolbar.addAction(open_file)
         toolbar.addAction(open_folder)
+        toolbar.addAction(self._compare_action)
 
         spacer = QWidget()
         spacer.setObjectName("toolbar-spacer")
@@ -786,9 +796,28 @@ class MainWindow(QMainWindow):
             self.open_file(path)
 
     def open_file(self, path: Path):
-        label = _jp_label(path.stem) or path.stem
-        self._populate([("(local)", "(file)", label, path)], root_label=str(path), skipped=0)
-        self.setWindowTitle(f"{path.name} — Theia")
+        self.open_files([path])
+
+    def open_files(self, paths: list[Path]):
+        if not paths:
+            return
+        items = []
+        errors = []
+        for path in paths:
+            if path.suffix.lower() == ".zip":
+                try:
+                    for inner in list_zip_xlsx(path):
+                        if not Path(inner).name.startswith("~$"):
+                            label = _jp_label(Path(inner).stem) or Path(inner).stem
+                            items.append(("(local)", path.stem, label, (path, inner)))
+                except Exception as exc:
+                    errors.append(f"{path.name}: {exc}")
+            elif path.suffix.lower() in _SUPPORTED_SUFFIXES and not path.name.startswith("~$"):
+                items.append(("(local)", "(files)", _jp_label(path.stem) or path.stem, path))
+        self._populate(items, root_label=f"{len(paths)} selected files")
+        if errors:
+            self._status.setText("Failed to open archives: " + "; ".join(errors))
+        self.setWindowTitle(f"{paths[0].name if len(paths) == 1 else str(len(paths)) + ' files'} — Theia")
 
     def open_folder(self, folder: Path):
         # Recurse so models in subfolders are picked up. Also look inside any
@@ -800,17 +829,17 @@ class MainWindow(QMainWindow):
                 continue
             suf = p.suffix.lower()
             if suf in _SUPPORTED_SUFFIXES:
-                label = _jp_label(p.stem)
-                if label:
-                    broker, analyst = _broker_analyst_from_folder_path(p, folder)
-                    items.append((broker, analyst, label, p))
-                else:
+                if p.name.startswith("~$"):
                     skipped += 1
+                    continue
+                label = _jp_label(p.stem) or p.stem
+                broker, analyst = _broker_analyst_from_folder_path(p, folder)
+                items.append((broker, analyst, label, p))
             elif suf == ".zip":
                 try:
                     for inner in list_zip_xlsx(p):
-                        label = _jp_label(Path(inner).stem)
-                        if label:
+                        label = _jp_label(Path(inner).stem) or Path(inner).stem
+                        if not Path(inner).name.startswith("~$"):
                             broker = _broker_from_path(p)
                             analyst = _analyst_from_zip_entry(inner) or p.stem
                             items.append((broker, analyst, label, (p, inner)))
@@ -831,8 +860,8 @@ class MainWindow(QMainWindow):
         skipped = 0
         broker = _broker_from_path(zip_path)
         for n in inner_names:
-            label = _jp_label(Path(n).stem)
-            if label:
+            label = _jp_label(Path(n).stem) or Path(n).stem
+            if not Path(n).name.startswith("~$"):
                 analyst = _analyst_from_zip_entry(n)
                 items.append((broker, analyst, label, (zip_path, n)))
             else:
@@ -845,9 +874,20 @@ class MainWindow(QMainWindow):
     def _populate(self, items: list[tuple[str, str, str, Source]], root_label: str, skipped: int = 0):
         """items = [(broker, analyst, label, source), ...]. Builds the
         three-level tree model (broker -> analyst -> company) and resets state."""
+        for worker in (self._preload_worker, self._warmer):
+            if worker is not None:
+                worker.requestInterruption()
+                worker.wait()
+        if self._warmer is not None:
+            self._warmer.deleteLater()
+        self._warmer = None
+        self._start_preload([])
+        for wb in self._workbooks.values():
+            wb.close()
         self._workbooks.clear()
         self._current_wb = None
         self._current_label = None
+        self._current_source = None
         self._sidecar_cache.clear()
         self._col_width_cache.clear()
         self._sheet_model_cache.clear()
@@ -856,7 +896,7 @@ class MainWindow(QMainWindow):
         self.table.setModel(None)
 
         if not items:
-            tail = f" ({skipped} non-JP skipped)" if skipped else ""
+            tail = f" ({skipped} temporary files skipped)" if skipped else ""
             self._status.setText(f"{root_label}{tail}   ·   no Excel files found")
             return
 
@@ -894,7 +934,7 @@ class MainWindow(QMainWindow):
         self.company_tree.expandAll()
 
         n_analysts = sum(len(v) for v in by_broker.values())
-        note = f" ({skipped} non-JP skipped)" if skipped else ""
+        note = f" ({skipped} temporary files skipped)" if skipped else ""
         self._status.setText(
             f"{root_label}{note}   ·   {len(items)} file{'s' if len(items) != 1 else ''}"
             f" across {n_analysts} analyst{'s' if n_analysts != 1 else ''}"
@@ -910,9 +950,7 @@ class MainWindow(QMainWindow):
                 if c_idx.isValid():
                     self.company_tree.setCurrentIndex(c_idx)
 
-        # Kick off background preload for the first _PRELOAD_MAX_FILES plain-file
-        # sources (canonical .xlsx). Zip-inner entries are skipped here — they're
-        # less common and require decompressing the outer zip on every access.
+        # Only warm a few first sheets; archive size must not determine RAM use.
         xlsx_paths = [src for _, _, _, src in items if isinstance(src, Path)]
         self._start_preload(xlsx_paths[:_PRELOAD_MAX_FILES])
 
@@ -921,7 +959,8 @@ class MainWindow(QMainWindow):
     def _start_preload(self, paths: list):
         if self._preload_worker is not None:
             self._preload_worker.requestInterruption()
-            self._preload_worker.wait(500)
+            self._preload_worker.wait()
+            self._preload_worker.deleteLater()
             self._preload_worker = None
         self._preload_cache.clear()
         self._preload_done = 0
@@ -937,17 +976,20 @@ class MainWindow(QMainWindow):
         worker = _PreloadWorker(paths, self._preload_cache, self)
         worker.file_done.connect(self._on_preload_file)
         worker.all_done.connect(self._on_preload_done)
-        worker.finished.connect(worker.deleteLater)
         self._preload_worker = worker
         worker.start()
 
     def _on_preload_file(self, _path: str, elapsed_ms: float, n_sheets: int, n_rows: int):
+        if self.sender() is not self._preload_worker:
+            return
         self._preload_done += 1
         self._preload_bar.setValue(self._preload_done)
         pct = int(100 * self._preload_done / self._preload_total) if self._preload_total else 0
         self._cache_label.setText(f"Loading…  {pct}%")
 
     def _on_preload_done(self, n_total: int, n_loaded: int, total_ms: float):
+        if self.sender() is not self._preload_worker:
+            return
         self._preload_bar.setVisible(False)
         self._cache_label.setText(
             f"✓  {n_loaded}/{n_total} cached  ·  {total_ms / 1000:.0f}s"
@@ -961,14 +1003,16 @@ class MainWindow(QMainWindow):
         self.company_tree.expandAll()
 
     def _open_file_dialog(self):
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
             "Open Excel file or zip",
             "",
             "Excel & zip (*.xlsx *.xls *.xlsm *.xlsb *.zip);;Excel files (*.xlsx *.xls *.xlsm *.xlsb);;Zip archives (*.zip);;All files (*.*)",
         )
-        if path:
-            self.open_path(Path(path))
+        if len(paths) == 1:
+            self.open_path(Path(paths[0]))
+        elif paths:
+            self.open_files([Path(p) for p in paths])
 
     def _open_folder_dialog(self):
         folder = QFileDialog.getExistingDirectory(self, "Open folder of Excel files")
@@ -988,7 +1032,7 @@ class MainWindow(QMainWindow):
             # because setSelectable(False), but defend just in case.
             return
         label = item.text()
-        wb = self._workbooks.get(source)
+        wb = _lru_get(self._workbooks, source)
         if wb is None:
             try:
                 wb = Workbook(source)
@@ -996,10 +1040,16 @@ class MainWindow(QMainWindow):
                 self._status.setText(f"Failed to open {label}: {e}")
                 self._sheets_model.setStringList([])
                 self.table.setModel(None)
+                self._current_wb = None
+                self._current_source = None
                 return
             self._workbooks[source] = wb
+            while len(self._workbooks) > 3:
+                _, old = self._workbooks.popitem(last=False)
+                old.close()
         self._current_wb = wb
         self._current_label = label
+        self._current_source = source
         visible = [s for s in wb.sheet_names if not _is_hidden_sheet(s)]
         self._sheets_model.setStringList(visible)
         if visible:
@@ -1132,14 +1182,14 @@ class MainWindow(QMainWindow):
         """② Start background thread to pre-load Arrow models for all sheets."""
         if self._warmer is not None:
             self._warmer.requestInterruption()
-            self._warmer.wait(200)
+            self._warmer.wait()
+            self._warmer.deleteLater()
             self._warmer = None
         if ArrowSheetModel is None or not sheet_names:
             return
         warmer = _SheetWarmer(
             wb_path, sheet_names, self._sheet_model_cache, _SHEET_MODEL_CACHE_MAXSIZE, self
         )
-        warmer.finished.connect(warmer.deleteLater)
         self._warmer = warmer
         warmer.start()
 
@@ -1266,11 +1316,88 @@ class MainWindow(QMainWindow):
         if len(urls) == 1 and (first.is_dir() or first.suffix.lower() == ".zip"):
             self.open_path(first)
             return
-        for url in urls:
-            p = Path(url.toLocalFile())
-            if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES:
-                self.open_file(p)
+        paths = [Path(url.toLocalFile()) for url in urls]
+        paths = [p for p in paths if p.is_file() and p.suffix.lower() in _SUPPORTED_SUFFIXES | {".zip"}]
+        if paths:
+            self.open_files(paths)
+
+    def _compare_selected(self):
+        if self._current_wb is None or self._current_source is None:
+            self._status.setText("Open a folder or multiple Excel files, then select cells to compare")
+            return
+        selection = self.table.br.selectionModel()
+        ranges = selection.selection()
+        if sum(r.width() * r.height() for r in ranges) > 64:
+            self._status.setText("Select up to 64 cells for comparison")
+            return
+        indices = sorted(selection.selectedIndexes(), key=lambda i: (i.row(), i.column()))
+        if not indices:
+            self._status.setText("Select cells in the sheet, then choose Compare Selected Cells")
+            return
+        sheet = self._sheets_proxy.data(self.sheet_list.currentIndex(), Qt.DisplayRole)
+        if not sheet:
+            return
+        metrics = []
+        model = self.table.model()
+        for index in indices:
+            row, col = index.row(), index.column()
+            title = f"{sheet}!{_col_letter(col)}{row + 1}"
+            for c in range(col - 1, -1, -1):
+                value = model.data(model.index(row, c), Qt.DisplayRole)
+                if value and not str(value).replace(",", "").replace(".", "").replace("-", "").isdigit():
+                    title = str(value)
+                    break
+            metrics.append(Metric(title, row, col))
+        sources = []
+
+        def collect(parent):
+            for r in range(self._companies_proxy.rowCount(parent)):
+                index = self._companies_proxy.index(r, 0, parent)
+                source = self._companies_proxy.data(index, Qt.UserRole)
+                if source is not None:
+                    sources.append((self._companies_proxy.data(index, Qt.DisplayRole), source))
+                collect(index)
+
+        collect(self._companies_proxy.index(-1, -1))
+        dialog = ComparisonDialog(sources, self._current_source, sheet, metrics, self)
+        dialog.open_source.connect(self._open_comparison_source)
+        self._comparison_dialogs.append(dialog)
+        dialog.destroyed.connect(lambda: self._comparison_dialogs.remove(dialog))
+        dialog.show()
+
+    def _open_comparison_source(self, source, sheet, row, col):
+        self.company_filter.clear()
+        self.sheet_filter.clear()
+        for item in self._companies_model.findItems("*", Qt.MatchWildcard | Qt.MatchRecursive):
+            if item.data(Qt.UserRole) != source:
+                continue
+            self.company_tree.setCurrentIndex(self._companies_proxy.mapFromSource(item.index()))
+            names = self._sheets_model.stringList()
+            if sheet not in names:
+                self._status.setText(f"Missing sheet: {sheet}")
                 return
+            self.sheet_list.setCurrentIndex(self._sheets_proxy.mapFromSource(self._sheets_model.index(names.index(sheet))))
+            model = self.table.model()
+            if model is not None:
+                index = model.index(row, col)
+                self.table.br.selectionModel().setCurrentIndex(index, QItemSelectionModel.ClearAndSelect)
+                self.table.br.scrollTo(index)
+            self.raise_()
+            return
+        self._status.setText("This file is no longer in the current folder or file list")
+
+    def closeEvent(self, event):
+        for dialog in self._comparison_dialogs:
+            if dialog.worker is not None:
+                dialog.worker.cancel()
+                dialog.worker.wait()
+        for worker in (self._preload_worker, self._warmer):
+            if worker is not None:
+                worker.requestInterruption()
+                worker.wait()
+        for wb in self._workbooks.values():
+            wb.close()
+        event.accept()
 
 
 def main():

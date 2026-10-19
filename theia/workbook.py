@@ -1,4 +1,5 @@
 import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -44,6 +45,7 @@ class Workbook:
         self.sheets: dict[str, Sheet] = {
             name: Sheet(name=name) for name in self._cal.sheet_names
         }
+        self._loaded: OrderedDict[str, None] = OrderedDict()
 
     @property
     def sheet_names(self) -> list[str]:
@@ -52,9 +54,24 @@ class Workbook:
     def load_sheet(self, name: str) -> Sheet:
         sheet = self.sheets[name]
         if not sheet.loaded:
-            sheet.rows = self._cal.get_sheet_by_name(name).to_python()
+            sheet.rows = self._cal.get_sheet_by_name(name).to_python(skip_empty_area=False)
             sheet.loaded = True
+        self._loaded[name] = None
+        self._loaded.move_to_end(name)
+        while len(self._loaded) > 3:
+            old, _ = self._loaded.popitem(last=False)
+            self.sheets[old].rows = []
+            self.sheets[old].loaded = False
         return sheet
+
+    def close(self):
+        self._cal.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 
 def list_zip_xlsx(zip_path: Path) -> list[str]:
