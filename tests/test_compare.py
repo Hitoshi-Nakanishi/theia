@@ -194,7 +194,8 @@ class ComparisonTests(unittest.TestCase):
                                       "metrics": [asdict(m) for m in saved]}), encoding="utf-8")
         sheet, loaded, match = load_preset(preset)
         results.clear()
-        worker = ComparisonWorker([("Shifted", shifted)], shifted, sheet, loaded, True, match_labels=match)
+        worker = ComparisonWorker([("Shifted", shifted)], self.root / "absent_reference.xlsx",
+                                  sheet, loaded, True, match_labels=match)
         worker.row_ready.connect(results.append)
         worker.run()
         self.assertEqual(results[0].values, [100, 101])

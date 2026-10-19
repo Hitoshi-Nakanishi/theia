@@ -178,8 +178,11 @@ class ComparisonWorker(QThread):
         if self.is_cancelled():
             return
         guards = [[] for _ in self.metrics]
-        locators = []
-        if self.check_labels or self.match_labels:
+        locators = [m.locator for m in self.metrics]
+        needs_reference = (self.match_labels and any(locator is None for locator in locators)) or (
+            self.check_labels and not self.match_labels
+        )
+        if needs_reference:
             try:
                 with Workbook(self.reference) as wb:
                     rows = wb.load_sheet(self.sheet_name).rows
@@ -236,7 +239,7 @@ class ComparisonWorker(QThread):
             except Exception as exc:
                 issues.append(f"Read error: {exc}")
             if not issues:
-                issues.append("OK" if all(guards) else "OK (address only for unchecked cells)")
+                issues.append("OK" if self.match_labels or all(guards) else "OK (address only for unchecked cells)")
             self.row_ready.emit(ComparisonRow(label, source, values, "; ".join(issues), coordinates, locations))
 
 
@@ -486,7 +489,7 @@ class ComparisonDialog(QDialog):
             return
         try:
             metrics = self.metrics
-            if self.match_labels.isChecked():
+            if self.match_labels.isChecked() and any(m.locator is None for m in metrics):
                 with Workbook(self.reference) as wb:
                     rows = wb.load_sheet(self.sheet_name).rows
                     metrics = [Metric(m.title, m.row, m.col, m.locator or cell_locator(rows, m)) for m in metrics]
