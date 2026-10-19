@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import tempfile
 import time
@@ -7,6 +8,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
+from dataclasses import asdict
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import QApplication
 from theia.compare import (
     ComparisonDialog, ComparisonModel, ComparisonProxy, ComparisonRow,
     ComparisonWorker, Metric, csv_value, export_csv,
+    cell_locator, load_preset,
 )
 from theia.workbook import Workbook
 
@@ -137,6 +140,67 @@ class ComparisonTests(unittest.TestCase):
                 self.assertEqual(reader.load_sheet(f"Sheet{i}").rows[0][0], i)
             self.assertEqual(sum(s.loaded for s in reader.sheets.values()), 3)
             self.assertEqual(reader.load_sheet("Sheet0").rows[0][0], 0)
+
+    def test_match_labels_handles_different_history_lengths_and_row_positions(self):
+        def layout(path, count, offset, unit="units", duplicate=False):
+            wb = ExcelWorkbook()
+            ws = wb.active
+            ws.title = "Model"
+            ws.cell(3 + offset, 1, "Period")
+            ws.cell(4 + offset, 1, "Kind")
+            for col in range(3, 3 + count):
+                ws.cell(3 + offset, col, f"History {col}")
+                ws.cell(4 + offset, col, "Actual")
+            for n in range(2):
+                col = 3 + count + n
+                ws.cell(3 + offset, col, f"Future {n + 1}")
+                ws.cell(4 + offset, col, "Forecast")
+                ws.cell(6 + offset, col, 100 + n)
+            ws.cell(6 + offset, 1, "Revenue")
+            ws.cell(6 + offset, 2, unit)
+            if duplicate:
+                ws.cell(10 + offset, 1, "Revenue")
+            wb.save(path)
+            wb.close()
+
+        reference = self.root / "reference.xlsx"
+        shifted = self.root / "shifted.xlsx"
+        mismatch = self.root / "unit_mismatch.xlsx"
+        duplicate = self.root / "duplicate.xlsx"
+        layout(reference, 2, 0)
+        layout(shifted, 5, 3)
+        layout(mismatch, 4, 0, unit="other units")
+        layout(duplicate, 3, 0, duplicate=True)
+        metrics = [Metric("First forecast", 5, 4), Metric("Second forecast", 5, 5)]
+        worker = ComparisonWorker([(p.stem, p) for p in (shifted, mismatch, duplicate)],
+                                  reference, "Model", metrics, True, match_labels=True)
+        results, failures = [], []
+        worker.row_ready.connect(results.append)
+        worker.failed.connect(failures.append)
+        worker.run()
+        self.assertEqual(failures, [])
+        self.assertEqual(results[0].values, [100, 101])
+        self.assertEqual(results[0].coordinates, [(8, 7), (8, 8)])
+        self.assertIn("Future 1", results[0].locations[0])
+        self.assertEqual(results[1].values, [None, None])
+        self.assertIn("unit", results[1].status)
+        self.assertIn("ambiguous", results[2].status)
+
+        with Workbook(reference) as wb:
+            rows = wb.load_sheet("Model").rows
+            saved = [Metric(m.title, m.row, m.col, cell_locator(rows, m)) for m in metrics]
+        preset = self.root / "comparison.json"
+        preset.write_text(json.dumps({"version": 1, "sheet": "Model", "match_labels": True,
+                                      "metrics": [asdict(m) for m in saved]}), encoding="utf-8")
+        sheet, loaded, match = load_preset(preset)
+        results.clear()
+        worker = ComparisonWorker([("Shifted", shifted)], shifted, sheet, loaded, True, match_labels=match)
+        worker.row_ready.connect(results.append)
+        worker.run()
+        self.assertEqual(results[0].values, [100, 101])
+        preset.write_text('{"version":1,"sheet":"Model","metrics":[]}', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            load_preset(preset)
 
     def test_sort_filter_and_csv_preserve_raw_numbers(self):
         model = ComparisonModel([self.metric], sheet_name="Model")

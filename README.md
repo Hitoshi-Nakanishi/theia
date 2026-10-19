@@ -89,7 +89,7 @@ workbook; it does not keep all source sheets or create a widget per company.
 Cancel keeps the results already read. Extract / refresh reads the files again.
 
 Comparison uses the same sheet name and cell addresses in each file. By default,
-it checks the nearest text label to the left and text header above each selected
+it checks text labels and units to the left and the nearest text header above each selected
 cell against the representative workbook. A mismatch leaves that result blank
 and records the reason in Status. This is a local label check, not a complete
 schema or unit check. Cells without text anchors use addresses only. The checkbox
@@ -104,6 +104,26 @@ formula is prefixed with an apostrophe in CSV.
 Formulas are **not recalculated**. Workbooks must already contain saved calculation
 results. Layout changes, differing units, and differing periods need to be
 resolved before treating the extracted values as comparable.
+
+For workbooks with different amounts of history, enable **Locate cells by item
+labels and header occurrence**, then click **Extract / refresh**. The viewer finds
+the row by its item label, finds the header row by its label when available, and
+uses the same occurrence of the selected column header. For example, the first
+`Forecast` column remains the first `Forecast` column even if more actual years
+precede it. Units are checked, and missing or ambiguous labels leave a blank
+result with a reason. If the header row has no label, its row number stays fixed.
+
+This compares the same relative column category, which can represent different
+calendar periods in different workbooks. Inspect **Extracted cells / headers**
+for each file's actual header and cell address; those details also appear in CSV
+and cell tooltips. Double-click opens the cell actually extracted.
+
+Use **Save comparison preset** to store the sheet, items and matching rules in
+a local JSON file. On a later folder, choose **Compare > Load Comparison Preset**
+to repeat the extraction without selecting cells again. Presets contain labels
+and selectors, not workbook paths or extracted numbers. Keep private presets
+outside the public checkout. Matching a folder/group label in the companies
+filter includes its child files, so date-named folders can select an event month.
 
 ## Performance Snapshot
 

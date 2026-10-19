@@ -1,7 +1,8 @@
 """Extract the same cells across local workbooks without retaining the sheets."""
 
 import csv
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ class Metric:
     title: str
     row: int
     col: int
+    locator: "CellLocator | None" = None
 
     @property
     def address(self):
@@ -32,6 +34,96 @@ class ComparisonRow:
     source: Source
     values: list
     status: str
+    coordinates: list = field(default_factory=list)
+    locations: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CellLocator:
+    label_col: int
+    label: str
+    header_row: int
+    header_label: tuple[int, str] | None
+    header: str
+    occurrence: int
+    units: list[tuple[int, str]]
+
+
+def text_at(rows, r, c):
+    value = cell_value(rows, r, c)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def cell_locator(rows, metric):
+    labels = [(c, text_at(rows, metric.row, c)) for c in range(metric.col)]
+    labels = [(c, value) for c, value in labels if value]
+    if not labels:
+        raise ValueError(f"{metric.address}: no item label to locate")
+    above = [(r, text_at(rows, r, metric.col)) for r in range(metric.row - 1, -1, -1)]
+    header_row, header = next(((r, value) for r, value in above if value), (-1, ""))
+    if not header:
+        raise ValueError(f"{metric.address}: no text column header to locate")
+    header_label = next(((c, text_at(rows, header_row, c)) for c in range(metric.col)
+                         if text_at(rows, header_row, c)), None)
+    matching = [c for c in range(len(rows[header_row])) if text_at(rows, header_row, c) == header]
+    return CellLocator(labels[0][0], labels[0][1], header_row, header_label,
+                       header, matching.index(metric.col), labels[1:])
+
+
+def locate_cell(rows, locator):
+    matches = [r for r in range(len(rows)) if text_at(rows, r, locator.label_col) == locator.label]
+    if len(matches) != 1:
+        raise ValueError("missing or ambiguous item label")
+    row = matches[0]
+    header_row = locator.header_row
+    if locator.header_label:
+        label_col, label = locator.header_label
+        matches = [r for r in range(len(rows)) if text_at(rows, r, label_col) == label]
+        if len(matches) != 1:
+            raise ValueError("missing or ambiguous header row")
+        header_row = matches[0]
+    if header_row >= len(rows):
+        raise ValueError("missing header row")
+    columns = [c for c in range(len(rows[header_row])) if text_at(rows, header_row, c) == locator.header]
+    if len(columns) <= locator.occurrence:
+        raise ValueError("missing column header or occurrence")
+    if any(text_at(rows, row, c) != unit for c, unit in locator.units):
+        raise ValueError("item unit/label mismatch")
+    return row, columns[locator.occurrence], header_row
+
+
+def load_preset(path: Path):
+    if path.stat().st_size > 1_000_000:
+        raise ValueError("Comparison preset is too large")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("version") != 1 or not isinstance(data.get("sheet"), str) or not data["sheet"]:
+        raise ValueError("Invalid comparison preset")
+    entries = data.get("metrics", [])
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 64:
+        raise ValueError("A preset needs 1 to 64 metrics")
+    metrics = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("title"), str):
+            raise ValueError("Invalid metric")
+        if any(type(entry.get(key)) is not int or not 0 <= entry[key] < limit
+               for key, limit in (("row", 1_048_576), ("col", 16_384))):
+            raise ValueError("Invalid cell address")
+        locator = entry.get("locator")
+        if locator is not None:
+            locator = CellLocator(**locator)
+            if (type(locator.label_col) is not int or not 0 <= locator.label_col < 16_384
+                    or type(locator.header_row) is not int or not 0 <= locator.header_row < 1_048_576
+                    or type(locator.occurrence) is not int or not 0 <= locator.occurrence < 16_384
+                    or not isinstance(locator.label, str) or not isinstance(locator.header, str)):
+                raise ValueError("Invalid label locator")
+            anchors = list(locator.units)
+            if locator.header_label is not None:
+                anchors.append(locator.header_label)
+            if any(len(anchor) != 2 or type(anchor[0]) is not int or not 0 <= anchor[0] < 16_384
+                   or not isinstance(anchor[1], str) for anchor in anchors):
+                raise ValueError("Invalid label anchor")
+        metrics.append(Metric(entry["title"], entry["row"], entry["col"], locator))
+    return data["sheet"], metrics, bool(data.get("match_labels", False))
 
 
 def source_text(source: Source) -> str:
@@ -41,19 +133,18 @@ def source_text(source: Source) -> str:
 
 
 def cell_value(rows: list[list], row: int, col: int):
-    if row < len(rows) and col < len(rows[row]):
+    if 0 <= row < len(rows) and 0 <= col < len(rows[row]):
         return rows[row][col]
     return None
 
 
 def metric_guards(rows: list[list], metric: Metric) -> list[tuple[int, int, str]]:
-    """Check the nearest text to the left and above the reference cell."""
+    """Check text labels/units to the left and the nearest header above."""
     guards = []
-    for r, c in ((metric.row, c) for c in range(metric.col - 1, -1, -1)):
+    for r, c in ((metric.row, c) for c in range(metric.col)):
         value = cell_value(rows, r, c)
         if isinstance(value, str) and value.strip():
             guards.append((r, c, value.strip()))
-            break
     for r in range(metric.row - 1, -1, -1):
         value = cell_value(rows, r, metric.col)
         if isinstance(value, str) and value.strip():
@@ -66,13 +157,14 @@ class ComparisonWorker(QThread):
     row_ready = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, sources, reference, sheet_name, metrics, check_labels, parent=None):
+    def __init__(self, sources, reference, sheet_name, metrics, check_labels, parent=None, match_labels=False):
         super().__init__(parent)
         self.sources = sources
         self.reference = reference
         self.sheet_name = sheet_name
         self.metrics = metrics
         self.check_labels = check_labels
+        self.match_labels = match_labels
         self._cancel_requested = False
 
     def cancel(self):
@@ -86,11 +178,14 @@ class ComparisonWorker(QThread):
         if self.is_cancelled():
             return
         guards = [[] for _ in self.metrics]
-        if self.check_labels:
+        locators = []
+        if self.check_labels or self.match_labels:
             try:
                 with Workbook(self.reference) as wb:
                     rows = wb.load_sheet(self.sheet_name).rows
                     guards = [metric_guards(rows, m) for m in self.metrics]
+                    if self.match_labels:
+                        locators = [m.locator or cell_locator(rows, m) for m in self.metrics]
                     del rows
             except Exception as exc:
                 self.failed.emit(f"Cannot read reference sheet: {exc}")
@@ -99,6 +194,8 @@ class ComparisonWorker(QThread):
             if self.is_cancelled():
                 return
             values = [None] * len(self.metrics)
+            coordinates = [None] * len(self.metrics)
+            locations = [""] * len(self.metrics)
             issues = []
             try:
                 with Workbook(source) as wb:
@@ -109,13 +206,26 @@ class ComparisonWorker(QThread):
                         for i, metric in enumerate(self.metrics):
                             if self.is_cancelled():
                                 return
-                            if any(
+                            row, col = metric.row, metric.col
+                            if self.match_labels:
+                                try:
+                                    row, col, header_row = locate_cell(rows, locators[i])
+                                except ValueError as exc:
+                                    issues.append(f"{metric.address}: {exc}")
+                                    continue
+                                context = [cell_value(rows, r, col) for r in (header_row - 1, header_row)]
+                                context = " / ".join(str(v) for v in context if v is not None and v != "")
+                                locations[i] = f"{self.sheet_name}!{_col_letter(col)}{row + 1} ({context})"
+                            elif any(
                                 str(cell_value(rows, r, c)).strip() != expected
                                 for r, c, expected in guards[i]
                             ):
                                 issues.append(f"{metric.address}: label/header mismatch")
                                 continue
-                            value = cell_value(rows, metric.row, metric.col)
+                            coordinates[i] = (row, col)
+                            if not locations[i]:
+                                locations[i] = f"{self.sheet_name}!{metric.address}"
+                            value = cell_value(rows, row, col)
                             if value is None or value == "":
                                 issues.append(f"{metric.address}: blank or no cached value")
                             elif isinstance(value, str) and value.startswith("#"):
@@ -127,7 +237,7 @@ class ComparisonWorker(QThread):
                 issues.append(f"Read error: {exc}")
             if not issues:
                 issues.append("OK" if all(guards) else "OK (address only for unchecked cells)")
-            self.row_ready.emit(ComparisonRow(label, source, values, "; ".join(issues)))
+            self.row_ready.emit(ComparisonRow(label, source, values, "; ".join(issues), coordinates, locations))
 
 
 class ComparisonModel(QAbstractTableModel):
@@ -141,7 +251,7 @@ class ComparisonModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self.rows)
 
     def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.metrics) + 3
+        return 0 if parent.isValid() else len(self.metrics) + 4
 
     def raw_value(self, row, col):
         item = self.rows[row]
@@ -151,7 +261,9 @@ class ComparisonModel(QAbstractTableModel):
             return item.values[col - 1]
         if col == len(self.metrics) + 1:
             return item.status
-        return source_text(item.source)
+        if col == len(self.metrics) + 2:
+            return source_text(item.source)
+        return "; ".join(item.locations)
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
@@ -160,6 +272,10 @@ class ComparisonModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             return _format_cell(value)
         if role == Qt.ToolTipRole:
+            item = self.rows[index.row()]
+            metric_index = index.column() - 1
+            if 0 <= metric_index < len(item.locations):
+                return f"{value}\n{item.locations[metric_index]}\n{item.status}"
             return str(value) if value is not None else "No value; see Status"
         if role == Qt.TextAlignmentRole and isinstance(value, (int, float)):
             return int(Qt.AlignRight | Qt.AlignVCenter)
@@ -171,7 +287,7 @@ class ComparisonModel(QAbstractTableModel):
         if orientation == Qt.Vertical:
             return str(section + 1)
         prefix = f"{self.sheet_name}!" if self.sheet_name else ""
-        headers = ["Company"] + [f"{m.title} [{prefix}{m.address}]" for m in self.metrics] + ["Status", "Source"]
+        headers = ["Company"] + [f"{m.title} [reference: {prefix}{m.address}]" for m in self.metrics] + ["Status", "Source", "Extracted cells / headers"]
         return headers[section]
 
     def append(self, row):
@@ -220,7 +336,7 @@ def export_csv(path: Path, proxy: ComparisonProxy):
 class ComparisonDialog(QDialog):
     open_source = Signal(object, str, int, int)
 
-    def __init__(self, sources, reference, sheet_name, metrics, parent=None):
+    def __init__(self, sources, reference, sheet_name, metrics, parent=None, match_labels=False):
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle(f"Compare — {sheet_name}")
@@ -241,6 +357,9 @@ class ComparisonDialog(QDialog):
         self.check_labels = QCheckBox("Check nearby item labels and column headers against the current workbook")
         self.check_labels.setChecked(True)
         layout.addWidget(self.check_labels)
+        self.match_labels = QCheckBox("Locate cells by item labels and header occurrence (allow different history lengths)")
+        self.match_labels.setChecked(match_labels)
+        layout.addWidget(self.match_labels)
 
         controls = QHBoxLayout()
         self.filter = QLineEdit()
@@ -258,6 +377,9 @@ class ComparisonDialog(QDialog):
         self.export_button.clicked.connect(self.export)
         controls.addWidget(self.export_button)
         layout.addLayout(controls)
+        self.preset_button = QPushButton("Save comparison preset…")
+        self.preset_button.clicked.connect(self.save_preset)
+        layout.addWidget(self.preset_button)
 
         self.model = ComparisonModel(metrics, self, sheet_name=sheet_name)
         self.proxy = ComparisonProxy(self)
@@ -294,10 +416,12 @@ class ComparisonDialog(QDialog):
         self.status.setText("Reading saved values…")
         self.run_button.setEnabled(False)
         self.check_labels.setEnabled(False)
+        self.match_labels.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.export_button.setEnabled(False)
         worker = ComparisonWorker(self.sources, self.reference, self.sheet_name,
-                                  self.metrics, self.check_labels.isChecked(), self)
+                                  self.metrics, self.check_labels.isChecked(), self,
+                                  match_labels=self.match_labels.isChecked())
         worker.row_ready.connect(self.add_row)
         worker.failed.connect(self.status.setText)
         worker.finished.connect(self.finished_reading)
@@ -315,6 +439,7 @@ class ComparisonDialog(QDialog):
         self.worker = None
         self.run_button.setEnabled(True)
         self.check_labels.setEnabled(True)
+        self.match_labels.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.export_button.setEnabled(bool(self.model.rows))
         if self.model.rows:
@@ -345,7 +470,26 @@ class ComparisonDialog(QDialog):
         row = self.model.rows[source_index.row()]
         metric_index = max(0, min(source_index.column() - 1, len(self.metrics) - 1))
         metric = self.metrics[metric_index]
-        self.open_source.emit(row.source, self.sheet_name, metric.row, metric.col)
+        coordinate = row.coordinates[metric_index] if row.coordinates else (metric.row, metric.col)
+        if coordinate is not None:
+            self.open_source.emit(row.source, self.sheet_name, *coordinate)
+
+    def save_preset(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save comparison preset", "comparison.json", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            metrics = self.metrics
+            if self.match_labels.isChecked():
+                with Workbook(self.reference) as wb:
+                    rows = wb.load_sheet(self.sheet_name).rows
+                    metrics = [Metric(m.title, m.row, m.col, m.locator or cell_locator(rows, m)) for m in metrics]
+            payload = {"version": 1, "sheet": self.sheet_name, "match_labels": self.match_labels.isChecked(),
+                       "metrics": [asdict(m) for m in metrics]}
+            Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.status.setText("Comparison preset saved")
+        except (OSError, ValueError, KeyError) as exc:
+            QMessageBox.warning(self, "Cannot save preset", str(exc))
 
     def closeEvent(self, event):
         if self.worker is not None:

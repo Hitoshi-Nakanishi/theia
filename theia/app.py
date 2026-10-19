@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from theia.compare import ComparisonDialog, Metric
+from theia.compare import ComparisonDialog, Metric, load_preset
 from theia.model import SheetModel, _col_letter
 from theia.table import FrozenPaneTable
 from theia.theme import THEME_ORDER, THEMES, build_stylesheet
@@ -516,6 +516,7 @@ class MainWindow(QMainWindow):
         self._companies_proxy.setSourceModel(self._companies_model)
         self._companies_proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._companies_proxy.setRecursiveFilteringEnabled(True)
+        self._companies_proxy.setAutoAcceptChildRows(True)
 
         self.company_tree = QTreeView()
         self.company_tree.setModel(self._companies_proxy)
@@ -654,6 +655,9 @@ class MainWindow(QMainWindow):
 
         compare_menu = self.menuBar().addMenu("&Compare")
         compare_menu.addAction(self._compare_action)
+        load_comparison = QAction("&Load Comparison Preset…", self)
+        load_comparison.triggered.connect(self._load_comparison_preset)
+        compare_menu.addAction(load_comparison)
 
         self._build_toolbar(open_file, open_folder)
 
@@ -1342,12 +1346,29 @@ class MainWindow(QMainWindow):
         for index in indices:
             row, col = index.row(), index.column()
             title = f"{sheet}!{_col_letter(col)}{row + 1}"
-            for c in range(col - 1, -1, -1):
+            for c in range(col):
                 value = model.data(model.index(row, c), Qt.DisplayRole)
                 if value and not str(value).replace(",", "").replace(".", "").replace("-", "").isdigit():
                     title = str(value)
                     break
             metrics.append(Metric(title, row, col))
+        self._show_comparison(sheet, metrics)
+
+    def _load_comparison_preset(self):
+        if self._current_source is None:
+            self._status.setText("Open Excel files before loading a comparison preset")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Load comparison preset", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            sheet, metrics, match_labels = load_preset(Path(path))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            self._status.setText(f"Cannot load comparison preset: {exc}")
+            return
+        self._show_comparison(sheet, metrics, match_labels)
+
+    def _show_comparison(self, sheet, metrics, match_labels=False):
         sources = []
 
         def collect(parent):
@@ -1359,7 +1380,7 @@ class MainWindow(QMainWindow):
                 collect(index)
 
         collect(self._companies_proxy.index(-1, -1))
-        dialog = ComparisonDialog(sources, self._current_source, sheet, metrics, self)
+        dialog = ComparisonDialog(sources, self._current_source, sheet, metrics, self, match_labels=match_labels)
         dialog.open_source.connect(self._open_comparison_source)
         self._comparison_dialogs.append(dialog)
         dialog.destroyed.connect(lambda: self._comparison_dialogs.remove(dialog))
