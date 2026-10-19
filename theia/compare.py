@@ -282,12 +282,15 @@ class ComparisonModel(QAbstractTableModel):
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role != Qt.DisplayRole:
+        if role not in (Qt.DisplayRole, Qt.ToolTipRole):
             return None
         if orientation == Qt.Vertical:
             return str(section + 1)
         prefix = f"{self.sheet_name}!" if self.sheet_name else ""
-        headers = ["Company"] + [f"{m.title} [reference: {prefix}{m.address}]" for m in self.metrics] + ["Status", "Source", "Extracted cells / headers"]
+        if role == Qt.ToolTipRole and 1 <= section <= len(self.metrics):
+            metric = self.metrics[section - 1]
+            return f"{metric.title} [reference: {prefix}{metric.address}]"
+        headers = ["Company"] + [m.title for m in self.metrics] + ["Status", "Source", "Extracted cells / headers"]
         return headers[section]
 
     def append(self, row):
@@ -327,7 +330,7 @@ def export_csv(path: Path, proxy: ComparisonProxy):
     model = proxy.sourceModel()
     with path.open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
-        writer.writerow([csv_value(model.headerData(c, Qt.Horizontal)) for c in range(model.columnCount())])
+        writer.writerow([csv_value(model.headerData(c, Qt.Horizontal, Qt.ToolTipRole)) for c in range(model.columnCount())])
         for r in range(proxy.rowCount()):
             source_row = proxy.mapToSource(proxy.index(r, 0)).row()
             writer.writerow([csv_value(model.raw_value(source_row, c)) for c in range(model.columnCount())])
@@ -340,7 +343,7 @@ class ComparisonDialog(QDialog):
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle(f"Compare — {sheet_name}")
-        self.resize(1100, 680)
+        self.resize(1500, 720)
         self.sources = sources
         self.reference = reference
         self.sheet_name = sheet_name
@@ -396,7 +399,10 @@ class ComparisonDialog(QDialog):
         self.table.setEditTriggers(QTableView.NoEditTriggers)
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.verticalHeader().setDefaultSectionSize(24)
-        self.table.horizontalHeader().setDefaultSectionSize(190)
+        self.table.horizontalHeader().setDefaultSectionSize(140)
+        self.table.setColumnWidth(0, 260)
+        for col in range(len(metrics) + 1, len(metrics) + 4):
+            self.table.setColumnWidth(col, 260)
         self.table.doubleClicked.connect(self.navigate)
         layout.addWidget(self.table, 1)
         self.progress = QProgressBar()
