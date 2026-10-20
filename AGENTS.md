@@ -1,8 +1,6 @@
 # AGENT GUIDELINES — theia
 
-This is a standalone PySide6 viewer. Private cleanup/preprocess code belongs in
-the ignored `private_models/` workspace, not in tracked files. This is its own
-repository, separate from the parent-project repository.
+Theia is a standalone PySide6 viewer for generated Excel valuation models. It reads local files and optional display metadata.
 
 ## Vendor identifiers and personal data — git hygiene
 
@@ -20,15 +18,8 @@ messages, code constants, README examples, sample fixtures, or test data:
 - **Real ticker positions, fund names, portfolio-identifying data,
   client codes,** or anything that could leak holdings.
 
-This project deliberately uses the *folder-name-as-label* convention
-(`<DATA_PATH>/broker_models/<broker>/...`). The actual broker label only ever
-lives in directory names on the local filesystem and in runtime arguments.
-Tracked code and commit messages refer to it as `<broker>`.
-
-If a fact about a specific vendor is genuinely required to explain
-behaviour (e.g. handling that vendor's quirky export format), name the
-vendor only inline in a one-line example body — never in commit titles,
-never in top-level constants, never in mapping tables.
+Folder names are display labels. Examples and fixtures use fictional companies and generic model collections.
+Keep documentation, code, dependencies, examples, and ignore rules limited to the viewer's own capabilities.
 
 ## Simplicity first
 

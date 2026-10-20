@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from theia.compare import ComparisonDialog, Metric, load_preset
 from theia.model import SheetModel, _col_letter
+from theia.paths import models_root
 from theia.table import FrozenPaneTable
 from theia.theme import THEME_ORDER, THEMES, build_stylesheet
 from theia.workbook import Source, Workbook, list_zip_xlsx
@@ -259,21 +260,13 @@ def _lru_put(cache: OrderedDict, key, value, maxsize: int):
         cache.popitem(last=False)  # evict oldest
 
 
-def _broker_from_path(source: Path) -> str:
-    """For a source under
-    ``<DATA_PATH>/broker_models/<broker>/…`` return the broker folder
-    name upper-cased; otherwise fall back to the immediate parent name."""
-    parents = list(source.parents)
-    for i in range(len(parents) - 1):
-        if parents[i + 1].name == "broker_models":
-            return parents[i].name.upper()
-    if parents and parents[0].name:
-        return parents[0].name.upper()
-    return "(unknown)"
+def _collection_from_path(source: Path) -> str:
+    """Use the containing folder as the archive collection label."""
+    return source.parent.name or "(local)"
 
 
-def _analyst_from_zip_entry(entry: str) -> str:
-    """Extract the analyst bucket from a zip entry's path."""
+def _group_from_zip_entry(entry: str) -> str:
+    """Extract the group bucket from a zip entry's path."""
     parts = entry.replace("\\", "/").strip("/").split("/")
     if len(parts) > 1:
         if parts[0].lower() in {"models", "files", "model"}:
@@ -282,12 +275,12 @@ def _analyst_from_zip_entry(entry: str) -> str:
     return "unknown"
 
 
-def _broker_analyst_from_folder_path(p: Path, root: Path) -> tuple[str, str]:
-    """Return (broker, analyst) inferred from a workbook's path under root.
+def _collection_group_from_folder_path(p: Path, root: Path) -> tuple[str, str]:
+    """Return (collection, group) inferred from a workbook's path under root.
 
     Conventions:
-      <root>/<broker>/<analyst>/<file>.xlsx   ->  (broker, analyst)
-      <root>/<analyst>/<file>.xlsx            ->  ("(local)", analyst)
+      <root>/<collection>/<group>/<file>.xlsx   ->  (collection, group)
+      <root>/<group>/<file>.xlsx            ->  ("(local)", group)
       <root>/<file>.xlsx                      ->  ("(local)", "(root)")
     """
     try:
@@ -506,7 +499,7 @@ class MainWindow(QMainWindow):
         self._sheet_model_cache: OrderedDict = OrderedDict()
         self._warmer: _SheetWarmer | None = None
 
-        # ---- Companies pane (tree: analyst -> companies) ----
+        # ---- Companies pane (tree: group -> companies) ----
         self.company_filter = QLineEdit()
         self.company_filter.setPlaceholderText("Filter companies…")
         self.company_filter.setClearButtonEnabled(True)
@@ -825,7 +818,7 @@ class MainWindow(QMainWindow):
 
     def open_folder(self, folder: Path):
         # Recurse so models in subfolders are picked up. Also look inside any
-        # .zip files we find. Items become (broker, analyst, label, source).
+        # .zip files we find. Items become (collection, group, label, source).
         items: list[tuple[str, str, str, Source]] = []
         skipped = 0
         for p in folder.rglob("*"):
@@ -837,16 +830,16 @@ class MainWindow(QMainWindow):
                     skipped += 1
                     continue
                 label = _jp_label(p.stem) or p.stem
-                broker, analyst = _broker_analyst_from_folder_path(p, folder)
-                items.append((broker, analyst, label, p))
+                collection, group = _collection_group_from_folder_path(p, folder)
+                items.append((collection, group, label, p))
             elif suf == ".zip":
                 try:
                     for inner in list_zip_xlsx(p):
                         label = _jp_label(Path(inner).stem) or Path(inner).stem
                         if not Path(inner).name.startswith("~$"):
-                            broker = _broker_from_path(p)
-                            analyst = _analyst_from_zip_entry(inner) or p.stem
-                            items.append((broker, analyst, label, (p, inner)))
+                            collection = _collection_from_path(p)
+                            group = _group_from_zip_entry(inner) or p.stem
+                            items.append((collection, group, label, (p, inner)))
                         else:
                             skipped += 1
                 except Exception:
@@ -862,12 +855,12 @@ class MainWindow(QMainWindow):
             return
         items: list[tuple[str, str, str, Source]] = []
         skipped = 0
-        broker = _broker_from_path(zip_path)
+        collection = _collection_from_path(zip_path)
         for n in inner_names:
             label = _jp_label(Path(n).stem) or Path(n).stem
             if not Path(n).name.startswith("~$"):
-                analyst = _analyst_from_zip_entry(n)
-                items.append((broker, analyst, label, (zip_path, n)))
+                group = _group_from_zip_entry(n)
+                items.append((collection, group, label, (zip_path, n)))
             else:
                 skipped += 1
         self._populate(items, root_label=str(zip_path), skipped=skipped)
@@ -876,8 +869,8 @@ class MainWindow(QMainWindow):
     # ---- Internals ----
 
     def _populate(self, items: list[tuple[str, str, str, Source]], root_label: str, skipped: int = 0):
-        """items = [(broker, analyst, label, source), ...]. Builds the
-        three-level tree model (broker -> analyst -> company) and resets state."""
+        """items = [(collection, group, label, source), ...]. Builds the
+        three-level tree model (collection -> group -> company) and resets state."""
         for worker in (self._preload_worker, self._warmer):
             if worker is not None:
                 worker.requestInterruption()
@@ -904,24 +897,24 @@ class MainWindow(QMainWindow):
             self._status.setText(f"{root_label}{tail}   ·   no Excel files found")
             return
 
-        by_broker: dict[str, dict[str, list[tuple[str, Source]]]] = {}
-        for broker, analyst, label, source in items:
-            by_broker.setdefault(broker, {}).setdefault(analyst, []).append((label, source))
+        by_collection: dict[str, dict[str, list[tuple[str, Source]]]] = {}
+        for collection, group, label, source in items:
+            by_collection.setdefault(collection, {}).setdefault(group, []).append((label, source))
 
         root = self._companies_model.invisibleRootItem()
-        for broker in sorted(by_broker):
-            analysts = by_broker[broker]
-            n_in_broker = sum(len(v) for v in analysts.values())
-            b_item = QStandardItem(f"{broker}   ({n_in_broker})")
+        for collection in sorted(by_collection):
+            groups = by_collection[collection]
+            n_in_collection = sum(len(v) for v in groups.values())
+            b_item = QStandardItem(f"{collection}   ({n_in_collection})")
             b_item.setEditable(False)
             b_item.setSelectable(False)
             bf = b_item.font(); bf.setBold(True); bf.setPointSize(bf.pointSize() + 1)
             b_item.setFont(bf)
             root.appendRow(b_item)
 
-            for analyst in sorted(analysts):
-                companies = sorted(analysts[analyst], key=lambda x: x[0])
-                a_item = QStandardItem(f"{analyst}   ({len(companies)})")
+            for group in sorted(groups):
+                companies = sorted(groups[group], key=lambda x: x[0])
+                a_item = QStandardItem(f"{group}   ({len(companies)})")
                 a_item.setEditable(False)
                 a_item.setSelectable(False)
                 af = a_item.font(); af.setBold(True)
@@ -937,15 +930,15 @@ class MainWindow(QMainWindow):
 
         self.company_tree.expandAll()
 
-        n_analysts = sum(len(v) for v in by_broker.values())
+        n_groups = sum(len(v) for v in by_collection.values())
         note = f" ({skipped} temporary files skipped)" if skipped else ""
         self._status.setText(
             f"{root_label}{note}   ·   {len(items)} file{'s' if len(items) != 1 else ''}"
-            f" across {n_analysts} analyst{'s' if n_analysts != 1 else ''}"
-            f" / {len(by_broker)} broker{'s' if len(by_broker) != 1 else ''}"
+            f" across {n_groups} group{'s' if n_groups != 1 else ''}"
+            f" / {len(by_collection)} collection{'s' if len(by_collection) != 1 else ''}"
         )
 
-        # Auto-select the first company (broker[0] -> analyst[0] -> company[0])
+        # Auto-select the first company (collection[0] -> group[0] -> company[0])
         b_idx = self._companies_proxy.index(0, 0)
         if b_idx.isValid():
             a_idx = self._companies_proxy.index(0, 0, b_idx)
@@ -1435,6 +1428,7 @@ def main():
 
     w = MainWindow()
     w.show()
-    if len(sys.argv) > 1:
-        w.open_path(Path(sys.argv[1]))
+    path = Path(sys.argv[1]) if len(sys.argv) > 1 else models_root()
+    if path.exists():
+        w.open_path(path)
     sys.exit(app.exec())

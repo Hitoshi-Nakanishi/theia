@@ -16,6 +16,3 @@ theia/_arrow_fast.c
 # Local environment overrides
 .env
 Taskfile.local.yml
-
-# Local private cleanup pipeline. Keep source-specific transforms out of git.
-private_models/

@@ -3,25 +3,15 @@
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![PySide6](https://img.shields.io/badge/GUI-PySide6-41cd52)
 
-Theia is a fast local desktop viewer for Excel valuation models. It opens a
-single workbook, a folder, a zip, or a prepared archive and lets you move between
-`<broker>` labels, analyst buckets, companies, and sheets without launching
-Excel.
+Theia is a fast local desktop viewer for generated Excel valuation models. Open
+one workbook or a folder of company models, inspect assumptions and valuation
+sheets, and compare the same metrics across companies without launching Excel.
+Files and folders can also be opened from zip archives.
 
 ![Theia test screen](docs/assets/theia-screenshot.png)
 
-The public repository is intentionally the viewer only. Source-specific cleanup,
-normalization, and export handling should live outside tracked files, for
-example in the ignored `private_models/` workspace.
-
-## Motivation
-
-Large model workbooks are slow to open and tedious to compare. Theia keeps
-the interactive part small: it renders workbooks quickly, preserves useful
-spreadsheet structure, and uses optional sidecars when a private cleanup
-pipeline has prepared them.
-
 Everything runs locally against files on your own disk. Nothing is uploaded.
+Optional display metadata preserves spreadsheet formatting and speeds up loading.
 
 ## Quick Start
 
@@ -29,10 +19,10 @@ Install [Task](https://taskfile.dev/) and Python 3.11+.
 
 ```sh
 cp .env.example .env       # Windows: copy .env.example .env
-# edit .env and point DATA_PATH at the root that holds your prepared archive
+# set THEIA_MODELS_PATH to the folder containing your valuation workbooks
 
 task install               # create .venv/ and install theia (editable)
-task run                   # launch the viewer on the default prepared archive
+task run                   # open the configured model folder
 ```
 
 You can also open anything directly:
@@ -47,7 +37,7 @@ The viewer accepts drag-and-drop of files, zips, or folders.
 
 ## Features
 
-- Browse an archive through a three-level tree: `<broker>` -> `<analyst>` -> company.
+- Browse company models by collection and folder, using your own directory labels.
 - Open a single Excel file, a folder, or a zip by menu, CLI argument, or drag-and-drop.
 - Open multiple Excel files together; folder and zip browsing accepts arbitrary filenames.
 - Compare selected cells across the files in the current companies filter, with numeric sorting and CSV export.
@@ -69,8 +59,7 @@ screenshots:
 task run-path -- examples/demo_models/0000.T_Demo_Model.xlsx
 ```
 
-The workbook and sidecar use fictional labels only. They do not contain broker
-names, analyst names, client identifiers, or real holdings.
+The workbook and sidecar use fictional labels only. They do not contain source identifiers, client identifiers, or real holdings.
 
 ## Compare Workbooks
 
@@ -148,36 +137,22 @@ workbooks, and 119.2 MiB after comparison. Three workbooks and twelve sheet
 models remained cached. These local Windows measurements use generated data;
 larger or more complex workbooks can have different costs.
 
-## Private Cleanup
+## Model Folders
 
-Keep cleanup and normalization code private. The ignored `private_models/` directory
-is reserved for local scripts that may know about source-specific exports,
-filename conventions, row-label mappings, or other proprietary details.
-
-The viewer does not need those details. It only needs files it can open:
-
-- `.xlsx`, `.xls`, `.xlsm`, or `.xlsb` workbooks
-- optional `.json` metadata sidecars
-- optional `.arrow` sheet sidecars
-
-## Data Layout
-
-By default, `task run` opens this prepared archive under `$DATA_PATH`:
+`task run` opens `THEIA_MODELS_PATH`, read from the environment or `.env`. When
+unset, Theia uses `~/Documents/Theia/models`. A `DATA_PATH` override places the
+default folder at `$DATA_PATH/models`.
 
 ```text
-$DATA_PATH/
-`-- broker_models/
-    `-- canonical/
-        `-- <broker>/
-            `-- <analyst>/
-                |-- <code>.T_<name>.xlsx
-                |-- <code>.T_<name>.json
-                `-- <code>.T_<name>.<sheet>.arrow
+models/
+|-- Company_A.xlsx
+`-- sector/
+    `-- Company_B.xlsx
 ```
 
-Paths are not hard-coded. `DATA_PATH` is read from the environment or `.env`.
-Use `task run-path -- <path>` when you want to open a different file, folder, or
-zip directly.
+There is no required source or filename convention. Workbooks can be `.xlsx`,
+`.xls`, `.xlsm`, or `.xlsb`. Optional `.json` and `.arrow` display metadata can sit
+beside a workbook. Use `task run-path -- <path>` to open any file, folder, or zip.
 
 ## Keyboard Shortcuts
 
@@ -201,8 +176,8 @@ zip directly.
 |---|---|
 | `task` | List available tasks |
 | `task install` | Create `.venv/` and install `theia` editable |
-| `task paths` | Print the resolved `DATA_PATH` and archive directories |
-| `task run` | Launch the viewer on the default prepared archive |
+| `task paths` | Print the configured model folder |
+| `task run` | Launch the viewer on the configured model folder |
 | `task run-path -- <path>` | Launch the viewer on an explicit file, folder, or zip |
 | `task build-cython` | Compile the optional native accelerator |
 | `task clean` | Remove `.venv/` and build artifacts |
@@ -222,7 +197,7 @@ task build-cython
 
 ```text
 theia/
-|-- app.py          # MainWindow, open file/folder/zip, <broker> -> <analyst> -> company tree
+|-- app.py          # MainWindow, open file/folder/zip, collection -> folder -> company tree
 |-- compare.py      # background cell extraction, comparison table, CSV export
 |-- table.py        # FrozenPaneTable, keyboard navigation, fast delegate
 |-- model.py        # SheetModel and Excel number-format parser
@@ -232,8 +207,6 @@ theia/
 |-- workbook.py     # lazy CalamineWorkbook wrapper
 `-- paths.py        # DATA_PATH and archive path resolution
 ```
-
-Local private cleanup code belongs in `private_models/`, which is gitignored.
 
 ## Verification
 
@@ -251,8 +224,8 @@ files, zip entries, sorting/export, cancellation, and viewer navigation.
 Theia is designed so a public checkout carries no proprietary information:
 
 - It reads only local files and uploads nothing.
-- `<broker>` labels and analyst buckets are derived from local folder names.
-- `.env`, `private_models/`, and build artifacts are gitignored.
+- Collection and folder labels come from local directory names.
+- `.env` and build artifacts are gitignored.
 
 ## Name
 

@@ -1,7 +1,6 @@
 version: '3'
 
-# DATA_PATH (and any other overrides) come from .env; create one by copying
-# .env.example and pointing DATA_PATH at where you keep your prepared archive.
+# Model folder overrides come from .env; copy .env.example to get started.
 dotenv: ['.env']
 
 vars:
@@ -9,8 +8,6 @@ vars:
   # .venv/Scripts/python.exe.
   PY: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
 
-  # Default prepared archive opened by `task run`.
-  CANONICAL_ROOT:  '{{.DATA_PATH}}/broker_models/canonical'
 
 tasks:
   default:
@@ -38,9 +35,9 @@ tasks:
         platforms: [darwin, linux]
 
   run:
-    desc: 'Launch Theia on the prepared archive'
+    desc: 'Launch Theia on the configured model folder'
     cmds:
-      - '{{.PY}} -m theia "{{.CANONICAL_ROOT}}"'
+      - '{{.PY}} -m theia'
 
   run-path:
     desc: 'Launch Theia on an explicit file / folder / zip - pass with `task run-path -- <path>`'
@@ -48,9 +45,9 @@ tasks:
       - '{{.PY}} -m theia {{.CLI_ARGS}}'
 
   paths:
-    desc: 'Print the resolved DATA_PATH and derived directories'
+    desc: 'Print the configured model folder'
     cmds:
-      - '{{.PY}} -c "from theia.paths import data_path, broker_models_root, canonical_root; print(f''DATA_PATH        = {data_path()}''); print(f''broker_models    = {broker_models_root()}''); print(f''canonical_root   = {canonical_root()}'')"'
+      - '{{.PY}} -c "from theia.paths import models_root; print(models_root())"'
 
   clean:
     desc: Remove venv and build artifacts
