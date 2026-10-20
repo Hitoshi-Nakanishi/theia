@@ -5,25 +5,27 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal, QItemSelectionModel
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QStandardItem, QStandardItemModel, QFontDatabase
+from PySide6.QtCore import Qt, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal, QItemSelectionModel
+from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QStandardItem, QStandardItemModel, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListView,
     QMainWindow,
+    QMenuBar,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QTabBar,
     QSplitter,
-    QStyle,
-    QToolBar,
+    QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -33,7 +35,7 @@ from theia.compare import ComparisonDialog, Metric, load_preset
 from theia.model import SheetModel, _col_letter
 from theia.paths import models_root
 from theia.table import FrozenPaneTable, _parse_excel_range
-from theia.theme import THEME_ORDER, THEMES, build_stylesheet
+from theia.theme import THEME_ORDER, THEMES, build_palette, build_stylesheet
 from theia.workbook import Source, Workbook, list_zip_xlsx
 
 # Loaded only when a workbook has an Arrow sidecar.
@@ -314,21 +316,16 @@ class MainWindow(QMainWindow):
         self.company_tree.selectionModel().currentChanged.connect(self._on_company_selected)
         self.company_filter.textChanged.connect(self._on_companies_filter_changed)
 
-        companies_pane = QWidget()
+        companies_pane = QFrame()
         companies_pane.setObjectName("nav-pane")
-        cp_outer = QVBoxLayout(companies_pane)
-        cp_outer.setContentsMargins(0, 0, 0, 0)
-        cp_outer.setSpacing(0)
+        cp_layout = QVBoxLayout(companies_pane)
+        cp_layout.setContentsMargins(8, 10, 8, 8)
+        cp_layout.setSpacing(6)
         cp_hdr = QLabel("MODELS")
         cp_hdr.setObjectName("section-header")
-        cp_outer.addWidget(cp_hdr)
-        cp_inner = QWidget()
-        cp_layout = QVBoxLayout(cp_inner)
-        cp_layout.setContentsMargins(8, 8, 8, 8)
-        cp_layout.setSpacing(6)
+        cp_layout.addWidget(cp_hdr)
         cp_layout.addWidget(self.company_filter)
         cp_layout.addWidget(self.company_tree, 1)
-        cp_outer.addWidget(cp_inner, 1)
 
         # ---- Sheets pane ----
         (
@@ -349,23 +346,24 @@ class MainWindow(QMainWindow):
         sheets_pane.hide()
 
         self._document_title = QLabel("Valuation models")
-        self._document_title.setObjectName("document-title")
+        self._document_title.setObjectName("app-title")
         self._document_title.setTextFormat(Qt.PlainText)
         self._cell_address = QLineEdit()
         self._cell_address.setObjectName("cell-address")
-        self._cell_address.setFixedWidth(84)
+        self._cell_address.setFixedWidth(72)
         self._cell_address.setPlaceholderText("A1")
         self._cell_address.setAccessibleName("Go to cell")
+        self._cell_address.setToolTip("Type a cell address and press Enter to go there")
         self._cell_address.returnPressed.connect(self._go_to_cell)
         self._cell_value = QLineEdit()
         self._cell_value.setObjectName("cell-value")
         self._cell_value.setReadOnly(True)
         self._cell_value.setPlaceholderText("Select a cell to inspect its value")
         self._cell_value.setAccessibleName("Selected cell value")
-        cell_bar = QWidget()
+        cell_bar = QFrame()
         cell_bar.setObjectName("cell-bar")
         cell_layout = QHBoxLayout(cell_bar)
-        cell_layout.setContentsMargins(0, 8, 0, 8)
+        cell_layout.setContentsMargins(4, 4, 4, 4)
         cell_layout.setSpacing(8)
         cell_layout.addWidget(self._cell_address)
         cell_layout.addWidget(self._cell_value, 1)
@@ -373,6 +371,7 @@ class MainWindow(QMainWindow):
         self.sheet_tabs = QTabBar()
         self.sheet_tabs.setObjectName("sheet-tabs")
         self.sheet_tabs.setExpanding(False)
+        self.sheet_tabs.setDrawBase(False)
         self.sheet_tabs.setUsesScrollButtons(True)
         self.sheet_tabs.setElideMode(Qt.ElideRight)
         self.sheet_tabs.setAccessibleName("Workbook sheets")
@@ -383,46 +382,40 @@ class MainWindow(QMainWindow):
         self.sheet_filter.textChanged.connect(self._sync_sheet_tabs)
         self.sheet_filter.setMaximumWidth(180)
         self.sheet_filter.setPlaceholderText("Find a sheet…")
-        sheet_bar = QWidget()
-        sheet_bar.setObjectName("sheet-bar")
-        sheet_layout = QHBoxLayout(sheet_bar)
-        sheet_layout.setContentsMargins(0, 6, 0, 0)
-        sheet_layout.setSpacing(12)
+        sheet_label = QLabel("SHEETS")
+        sheet_label.setObjectName("section-header")
+        sheet_strip = QFrame()
+        sheet_strip.setObjectName("sheet-strip")
+        sheet_layout = QHBoxLayout(sheet_strip)
+        sheet_layout.setContentsMargins(12, 4, 12, 4)
+        sheet_layout.setSpacing(8)
+        sheet_layout.addWidget(sheet_label)
         sheet_layout.addWidget(self.sheet_tabs, 1)
         sheet_layout.addWidget(self.sheet_filter)
 
-        empty = QWidget()
-        empty.setObjectName("empty-state")
-        empty_layout = QVBoxLayout(empty)
-        empty_layout.addStretch()
-        heading = QLabel("A clearer view of your models.")
-        heading.setObjectName("empty-heading")
-        heading.setAlignment(Qt.AlignCenter)
-        description = QLabel("Open an Excel workbook or a folder of company models.")
-        description.setObjectName("empty-description")
-        description.setAlignment(Qt.AlignCenter)
-        open_button = QPushButton("Open workbook")
-        open_button.setObjectName("primary-button")
-        open_button.clicked.connect(self._open_file_dialog)
-        empty_layout.addWidget(heading)
-        empty_layout.addWidget(description)
-        empty_layout.addSpacing(16)
-        empty_layout.addWidget(open_button, 0, Qt.AlignHCenter)
-        empty_layout.addStretch()
         self._sheet_stack = QStackedWidget()
         self._sheet_stack.setObjectName("sheet-surface")
-        self._sheet_stack.addWidget(empty)
+        self._sheet_stack.addWidget(self._build_empty_state())
         self._sheet_stack.addWidget(self.table)
+        # The strip and the cell bar describe a sheet, so they show only while one is open.
+        self._sheet_stack.currentChanged.connect(lambda index: (sheet_strip.setVisible(index == 1),
+                                                                cell_bar.setVisible(index == 1)))
+        sheet_strip.hide()
+        cell_bar.hide()
 
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(12, 8, 12, 12)
+        content_layout.setSpacing(8)
+        content_layout.addWidget(cell_bar)
+        content_layout.addWidget(self._sheet_stack, 1)
         workspace = QWidget()
         workspace.setObjectName("workspace")
         workspace_layout = QVBoxLayout(workspace)
-        workspace_layout.setContentsMargins(20, 16, 20, 12)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
-        workspace_layout.addWidget(self._document_title)
-        workspace_layout.addWidget(cell_bar)
-        workspace_layout.addWidget(self._sheet_stack, 1)
-        workspace_layout.addWidget(sheet_bar)
+        workspace_layout.addWidget(sheet_strip)
+        workspace_layout.addWidget(content, 1)
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(companies_pane)
         splitter.addWidget(workspace)
@@ -436,12 +429,10 @@ class MainWindow(QMainWindow):
 
         # ---- Menu ----
         open_file = QAction("Open &workbook…", self)
-        open_file.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         open_file.setShortcut(QKeySequence.Open)
         open_file.triggered.connect(self._open_file_dialog)
 
-        open_folder = QAction("Open F&older…", self)
-        open_folder.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        open_folder = QAction("Open f&older…", self)
         open_folder.setShortcut("Ctrl+Shift+O")
         open_folder.triggered.connect(self._open_folder_dialog)
 
@@ -494,7 +485,10 @@ class MainWindow(QMainWindow):
         quit_act.setShortcut(QKeySequence.Quit)
         quit_act.triggered.connect(self.close)
 
-        file_menu = self.menuBar().addMenu("&File")
+        menu_bar = QMenuBar()
+        menu_bar.setObjectName("app-menu")
+        menu_bar.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        file_menu = menu_bar.addMenu("&File")
         file_menu.addAction(open_file)
         file_menu.addAction(open_folder)
         file_menu.addSeparator()
@@ -503,7 +497,7 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(quit_act)
 
-        view_menu = self.menuBar().addMenu("&View")
+        view_menu = menu_bar.addMenu("&View")
         view_menu.addAction(self._sidebar_action)
         view_menu.addAction(self._dark_action)
         theme_menu = view_menu.addMenu("&Theme")
@@ -515,19 +509,17 @@ class MainWindow(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction(self._toggle_groups_act)
 
-        compare_menu = self.menuBar().addMenu("&Compare")
+        compare_menu = menu_bar.addMenu("&Compare")
         compare_menu.addAction(self._compare_action)
         load_comparison = QAction("&Load Comparison Preset…", self)
         load_comparison.triggered.connect(self._load_comparison_preset)
         compare_menu.addAction(load_comparison)
 
-        self._build_toolbar(open_file, open_folder)
-
-        # ---- Status bar ----
-        self._status = QLabel(
-            "Open a workbook or folder · Drag and drop supported"
-        )
-        self.statusBar().addWidget(self._status, 1)  # stretch=1 takes all left space
+        # ---- Bar: brand, menus, the open model, the latest status and the actions ----
+        self._status = QLabel("Open a workbook or folder · Drag and drop supported")
+        self._status.setObjectName("app-detail")
+        self._status.setTextFormat(Qt.PlainText)
+        self._status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         # Preload progress widget: "Loading 42%  [====    ]"
         self._cache_label = QLabel("")
@@ -538,13 +530,33 @@ class MainWindow(QMainWindow):
         self._preload_bar.setFixedWidth(140)
         self._preload_bar.setVisible(False)
 
-        _pw = QWidget()
-        _pw_lay = QHBoxLayout(_pw)
-        _pw_lay.setContentsMargins(0, 0, 8, 0)
-        _pw_lay.setSpacing(8)
-        _pw_lay.addWidget(self._cache_label)
-        _pw_lay.addWidget(self._preload_bar)
-        self.statusBar().addPermanentWidget(_pw)
+        brand = QLabel("Theia")
+        brand.setObjectName("app-brand")
+        bar = QFrame()
+        bar.setObjectName("app-bar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(12, 3, 8, 3)
+        bar_layout.setSpacing(10)
+        bar_layout.addWidget(brand)
+        bar_layout.addWidget(menu_bar)
+        bar_layout.addWidget(self._document_title)
+        bar_layout.addWidget(self._status, 1)
+        bar_layout.addWidget(self._cache_label)
+        bar_layout.addWidget(self._preload_bar)
+        for action in (open_file, open_folder, self._compare_action):
+            action.setToolTip(f"{action.text().replace('&', '')} ({action.shortcut().toString(QKeySequence.NativeText)})")
+            button = QToolButton()
+            button.setObjectName("bar-button")
+            button.setDefaultAction(action)
+            bar_layout.addWidget(button)
+        theme_button = QToolButton()
+        theme_button.setObjectName("theme-button")
+        theme_button.setText("◐")
+        theme_button.setToolTip("Switch between the light and dark theme")
+        theme_button.setAccessibleName("Switch theme")
+        theme_button.clicked.connect(lambda: self._set_dark_mode(not self._dark_mode))
+        bar_layout.addWidget(theme_button)
+        self.setMenuWidget(bar)
 
         # ---- Drag & drop ----
         self.setAcceptDrops(True)
@@ -554,20 +566,52 @@ class MainWindow(QMainWindow):
 
     # ---- Theme / view controls ----
 
-    def _build_toolbar(self, open_file: QAction, open_folder: QAction):
-        toolbar = QToolBar("Controls", self)
-        toolbar.setObjectName("main-toolbar")
-        toolbar.setMovable(False)
-        toolbar.setIconSize(QSize(16, 16))
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        toolbar.addAction(open_file)
-        toolbar.addAction(open_folder)
-        toolbar.addAction(self._compare_action)
+    def _build_empty_state(self) -> QWidget:
+        """The start panel: how to open models and where the default model folder is."""
+        root = models_root()
+        if root.is_dir():
+            folder_note = f"Model folder: {root}"
+        else:
+            folder_note = (f"Model folder {root} does not exist. "
+                           "Set THEIA_MODELS_PATH in .env, or open a workbook or folder.")
+        heading = QLabel("Open valuation models")
+        heading.setObjectName("empty-heading")
+        description = QLabel("Drop Excel files, a folder or a zip here, or choose one below.")
+        description.setObjectName("empty-description")
+        open_button = QPushButton("Open workbook…")
+        open_button.setObjectName("primary-button")
+        open_button.clicked.connect(self._open_file_dialog)
+        folder_button = QPushButton("Open folder…")
+        folder_button.clicked.connect(self._open_folder_dialog)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        buttons.addStretch()
+        buttons.addWidget(open_button)
+        buttons.addWidget(folder_button)
+        buttons.addStretch()
+        folder = QLabel(folder_note)
+        folder.setObjectName("empty-note")
+        folder.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        keys = QLabel("Ctrl+O workbook · Ctrl+Shift+O folder · Ctrl+B sidebar · Ctrl+Shift+C compare selected cells")
+        keys.setObjectName("empty-note")
 
-        brand = QLabel("Theia")
-        brand.setObjectName("app-brand")
-        toolbar.insertWidget(toolbar.actions()[0], brand)
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        empty = QWidget()
+        empty.setObjectName("empty-state")
+        layout = QVBoxLayout(empty)
+        layout.setSpacing(6)
+        layout.addStretch()
+        for label in (heading, description):
+            label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(label)
+        layout.addSpacing(10)
+        layout.addLayout(buttons)
+        layout.addSpacing(14)
+        for label in (folder, keys):
+            label.setAlignment(Qt.AlignCenter)
+            label.setWordWrap(True)
+            layout.addWidget(label)
+        layout.addStretch()
+        return empty
 
     def _sync_sheet_tabs(self, *_):
         current = self.sheet_list.currentIndex()
@@ -675,6 +719,7 @@ class MainWindow(QMainWindow):
     def _apply_theme(self):
         app = QApplication.instance()
         if app is not None:
+            app.setPalette(build_palette(self._theme_key, self._dark_mode))
             app.setStyleSheet(build_stylesheet(self._theme_key, self._dark_mode))
 
     # ---- Public open API ----
@@ -800,6 +845,8 @@ class MainWindow(QMainWindow):
             by_collection.setdefault(collection, {}).setdefault(group, []).append((label, source))
 
         root = self._companies_model.invisibleRootItem()
+        folder_font = QFont(self.company_tree.font())
+        folder_font.setWeight(QFont.DemiBold)
         for collection in sorted(by_collection):
             groups = by_collection[collection]
             collection_parent = root
@@ -807,6 +854,7 @@ class MainWindow(QMainWindow):
                 collection_parent = QStandardItem(collection)
                 collection_parent.setEditable(False)
                 collection_parent.setSelectable(False)
+                collection_parent.setFont(folder_font)
                 root.appendRow(collection_parent)
             for group in sorted(groups):
                 parent = collection_parent
@@ -814,6 +862,7 @@ class MainWindow(QMainWindow):
                     parent = QStandardItem(group)
                     parent.setEditable(False)
                     parent.setSelectable(False)
+                    parent.setFont(folder_font)
                     collection_parent.appendRow(parent)
                 for label, source in sorted(groups[group], key=lambda item: item[0]):
                     item = QStandardItem(label)
@@ -1298,6 +1347,8 @@ def main():
     app.setStyleSheet(build_stylesheet("theia", False))
 
     font = QFontDatabase.systemFont(QFontDatabase.GeneralFont)
+    # Japanese company and sheet names need a Japanese UI face behind the Latin one.
+    font.setFamilies(["Segoe UI", "Yu Gothic UI", "Meiryo UI", font.family()])
     default_size = app.font().pointSize()
     if default_size > 0:
         font.setPointSize(max(9, default_size - 1))

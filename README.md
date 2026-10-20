@@ -41,12 +41,13 @@ The viewer accepts drag-and-drop of files, zips, or folders.
 - Open a single Excel file, a folder, or a zip by menu, CLI argument, or drag-and-drop.
 - Open multiple Excel files together; folder and zip browsing accepts arbitrary filenames.
 - Compare selected cells across the files in the current companies filter, with numeric sorting and CSV export.
-- Use the neutral Theia theme or Midnight, Aurora, and Ember, with light and dark modes.
+- One slim bar holds the menus, the open model, its status and the main actions; the ◐ button switches light and dark.
+- Use the Theia theme or Midnight, Aurora, and Ember (View > Theme), each in light and dark.
 - Toggle the navigation sidebar when the table needs the full window width.
 - Load pre-formatted `.arrow` sidecars when present for near-instant sheet display.
 - Render Excel-style number formats from sidecar metadata when available.
 - Preserve hidden rows/columns, merged cells, freeze panes, and outline groups.
-- Switch sheets with bottom tabs, inspect a selected cell, or jump directly to an address.
+- Switch sheets with the tab strip above the sheet, inspect a selected cell, or jump directly to an address.
 - Keep one workbook and one decoded sheet open, with at most four recently rendered sheet models.
 - Load data on demand; metadata and column-width caches are bounded.
 - Optionally compile a small Cython extension, with a pure-Python fallback.
