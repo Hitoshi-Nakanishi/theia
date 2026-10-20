@@ -373,7 +373,8 @@ class MainWindow(QMainWindow):
         self.sheet_tabs.setExpanding(False)
         self.sheet_tabs.setDrawBase(False)
         self.sheet_tabs.setUsesScrollButtons(True)
-        self.sheet_tabs.setElideMode(Qt.ElideRight)
+        # Short Japanese sheet names elided to one character are unreadable, so the strip scrolls instead.
+        self.sheet_tabs.setElideMode(Qt.ElideNone)
         self.sheet_tabs.setAccessibleName("Workbook sheets")
         self.sheet_tabs.currentChanged.connect(self._on_sheet_tab_changed)
         self._sheets_proxy.modelReset.connect(self._sync_sheet_tabs)
