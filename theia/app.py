@@ -6,7 +6,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal, QItemSelectionModel
-from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QKeySequence, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QStandardItem, QStandardItemModel, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
     QListView,
     QMainWindow,
     QProgressBar,
-    QSizePolicy,
+    QPushButton,
+    QStackedWidget,
+    QTabBar,
     QSplitter,
     QStyle,
     QToolBar,
@@ -30,162 +32,13 @@ from PySide6.QtWidgets import (
 from theia.compare import ComparisonDialog, Metric, load_preset
 from theia.model import SheetModel, _col_letter
 from theia.paths import models_root
-from theia.table import FrozenPaneTable
+from theia.table import FrozenPaneTable, _parse_excel_range
 from theia.theme import THEME_ORDER, THEMES, build_stylesheet
 from theia.workbook import Source, Workbook, list_zip_xlsx
 
-try:
-    from theia.arrow_model import ArrowSheetModel
-except ImportError:
-    ArrowSheetModel = None
+# Loaded only when a workbook has an Arrow sidecar.
+ArrowSheetModel = None
 
-
-STYLE = """
-/* ===== Base ===== */
-QMainWindow, QWidget {
-    background: #f6f8fa;
-    color: #1f2328;
-    font-family: "Segoe UI", system-ui, sans-serif;
-}
-
-/* ===== Splitter ===== */
-QSplitter::handle { background: #d0d7de; }
-QSplitter::handle:horizontal { width: 1px; }
-QSplitter::handle:vertical   { height: 1px; }
-
-/* ===== Pane section header ===== */
-QLabel#section-header {
-    background: #f6f8fa;
-    color: #6e7781;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    padding: 10px 12px 5px 12px;
-    border-bottom: 1px solid #eaeef2;
-}
-
-/* ===== Filter inputs ===== */
-QLineEdit {
-    padding: 6px 10px;
-    border: 1px solid #d0d7de;
-    border-radius: 6px;
-    background: #ffffff;
-    color: #1f2328;
-    selection-background-color: #0969da;
-    selection-color: #ffffff;
-    font-size: 13px;
-}
-QLineEdit:focus { border-color: #0969da; }
-
-/* ===== Companies tree ===== */
-QTreeView {
-    border: none;
-    background: #f6f8fa;
-    padding: 2px;
-    font-size: 13px;
-    outline: 0;
-    show-decoration-selected: 1;
-}
-QTreeView::item {
-    padding: 5px 8px 5px 4px;
-    border-radius: 4px;
-    margin: 1px 4px 1px 0;
-}
-QTreeView::item:hover    { background: #eaeef2; }
-QTreeView::item:selected { background: #0969da; color: #ffffff; }
-QTreeView::branch        { background: #f6f8fa; }
-
-/* ===== Sheets list ===== */
-QListView {
-    border: none;
-    background: #f6f8fa;
-    padding: 4px;
-    font-size: 13px;
-    outline: 0;
-}
-QListView::item {
-    padding: 6px 10px;
-    border-radius: 5px;
-    margin: 1px 2px;
-}
-QListView::item:hover    { background: #eaeef2; }
-QListView::item:selected { background: #0969da; color: #ffffff; }
-
-/* ===== Table ===== */
-QTableView {
-    background: #ffffff;
-    alternate-background-color: #f6f8fa;
-    gridline-color: #eaeef2;
-    border: none;
-    selection-background-color: #ddf4ff;
-    selection-color: #1f2328;
-    font-size: 12px;
-}
-QHeaderView::section {
-    background: #f6f8fa;
-    color: #57606a;
-    padding: 5px 8px;
-    border: none;
-    border-right: 1px solid #eaeef2;
-    border-bottom: 1px solid #d0d7de;
-    font-weight: 600;
-    font-size: 11px;
-}
-QHeaderView::section:vertical {
-    padding: 2px 8px;
-    border-right: 1px solid #d0d7de;
-    border-bottom: 1px solid #eaeef2;
-}
-QTableCornerButton::section {
-    background: #f6f8fa;
-    border-right: 1px solid #d0d7de;
-    border-bottom: 1px solid #d0d7de;
-}
-
-/* ===== Scrollbars ===== */
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: transparent;
-    width: 8px;
-    height: 8px;
-    margin: 0;
-}
-QScrollBar::handle { background: #c1c8cf; border-radius: 4px; min-height: 20px; min-width: 20px; }
-QScrollBar::handle:hover { background: #8c959f; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
-QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-
-/* ===== Preload progress bar ===== */
-QProgressBar {
-    border: none;
-    border-radius: 3px;
-    background: #eaeef2;
-    min-height: 6px;
-    max-height: 6px;
-}
-QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0969da, stop:1 #218bff);
-    border-radius: 3px;
-}
-
-/* ===== Status bar ===== */
-QStatusBar {
-    background: #f6f8fa;
-    border-top: 1px solid #d0d7de;
-    color: #57606a;
-    font-size: 11px;
-    padding: 0;
-}
-QStatusBar QLabel { color: #57606a; font-size: 11px; }
-
-/* ===== Menu ===== */
-QMenuBar { background: #ffffff; border-bottom: 1px solid #d0d7de; padding: 2px 4px; }
-QMenuBar::item { padding: 5px 10px; border-radius: 4px; }
-QMenuBar::item:selected { background: #eaeef2; }
-QMenu { background: #ffffff; border: 1px solid #d0d7de; border-radius: 8px; padding: 4px; }
-QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; font-size: 13px; }
-QMenu::item:selected { background: #eaeef2; color: #1f2328; }
-QMenu::separator { height: 1px; background: #eaeef2; margin: 4px 0; }
-"""
 
 _SUPPORTED_SUFFIXES = {".xlsx", ".xls", ".xlsm", ".xlsb"}
 
@@ -200,8 +53,8 @@ def _setting_bool(settings: QSettings, key: str, default: bool) -> bool:
 
 
 def _setting_theme(settings: QSettings) -> str:
-    value = str(settings.value("theme/name", "midnight"))
-    return value if value in THEMES else "midnight"
+    value = str(settings.value("theme/name", "theia"))
+    return value if value in THEMES else "theia"
 
 # Column width bounds when auto-sizing (px)
 _MIN_COL_W = 60
@@ -233,10 +86,10 @@ _HIDDEN_SHEET_PATTERNS = (
 _PRELOAD_CACHE_MAXSIZE = 3
 
 # Maximum number of sheet model entries kept in the sheet model cache (LRU eviction)
-_SHEET_MODEL_CACHE_MAXSIZE = 12
+_SHEET_MODEL_CACHE_MAXSIZE = 4
 
 # Maximum number of paths sent to the preload worker per folder load
-_PRELOAD_MAX_FILES = 3
+_PRELOAD_MAX_FILES = 0
 
 
 def _lru_get(cache: OrderedDict, key):
@@ -403,64 +256,6 @@ class _PreloadWorker(QThread):
         self.all_done.emit(len(self._paths), n_loaded, total_ms)
 
 
-class _SheetWarmer(QThread):
-    """Background thread: pre-load all Arrow sheet models for one workbook
-    into the shared sheet model cache so subsequent sheet selections are
-    instant cache hits."""
-
-    sheet_done = Signal(str)
-
-    def __init__(
-        self,
-        wb_path: Path,
-        sheet_names: list,
-        cache: OrderedDict,
-        maxsize: int,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self._wb_path = wb_path
-        self._sheet_names = sheet_names
-        self._cache = cache
-        self._maxsize = maxsize
-
-    def run(self):
-        if ArrowSheetModel is None:
-            return
-        try:
-            import pyarrow as pa
-            import pyarrow.ipc as pa_ipc
-        except ImportError:
-            return
-        for name in self._sheet_names:
-            if self.isInterruptionRequested():
-                break
-            cache_key = (self._wb_path, name)
-            if _lru_get(self._cache, cache_key) is not None:
-                continue
-            safe = re.sub(r"[^\w\-]", "_", name)
-            arrow_path = self._wb_path.parent / f"{self._wb_path.stem}.{safe}.arrow"
-            if not arrow_path.exists():
-                continue
-            try:
-                mmap = pa.memory_map(str(arrow_path), "r")
-                reader = pa_ipc.open_file(mmap)
-                batch = reader.get_batch(0)
-                model = ArrowSheetModel(batch)
-                merged_cells = model.merged_cells
-                group_rows_0 = {r - 1 for r in model.row_outlines}
-                group_cols_0 = {c - 1 for c in model.col_outlines}
-                _lru_put(
-                    self._cache,
-                    cache_key,
-                    (model, merged_cells, group_rows_0, group_cols_0),
-                    self._maxsize,
-                )
-                self.sheet_done.emit(name)
-            except Exception:
-                pass
-
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -468,7 +263,7 @@ class MainWindow(QMainWindow):
         self.resize(1500, 900)
         self._settings = QSettings("Theia", "Theia")
         self._theme_key = _setting_theme(self._settings)
-        self._dark_mode = _setting_bool(self._settings, "theme/dark", True)
+        self._dark_mode = _setting_bool(self._settings, "theme/dark", False)
         self._sidebar_visible = _setting_bool(self._settings, "view/sidebar", True)
         self._theme_combo: QComboBox | None = None
         self._dark_toggle: QCheckBox | None = None
@@ -491,17 +286,16 @@ class MainWindow(QMainWindow):
         self._preload_total = 0
 
         # Per-session caches cleared on folder reload
-        self._sidecar_cache: dict = {}    # Path -> full sidecar JSON dict
-        self._col_width_cache: dict = {}  # (Path, sheet_name) -> [int, ...]
+        self._sidecar_cache: OrderedDict = OrderedDict()    # Path -> full sidecar JSON dict
+        self._col_width_cache: OrderedDict = OrderedDict()  # (Path, sheet_name) -> [int, ...]
 
         # Sheet model cache: (Path, sheet_name) -> (model, merged_cells, group_rows_0, group_cols_0)
         # LRU OrderedDict bounded to _SHEET_MODEL_CACHE_MAXSIZE entries.
         self._sheet_model_cache: OrderedDict = OrderedDict()
-        self._warmer: _SheetWarmer | None = None
 
         # ---- Companies pane (tree: group -> companies) ----
         self.company_filter = QLineEdit()
-        self.company_filter.setPlaceholderText("Filter companies…")
+        self.company_filter.setPlaceholderText("Find a company…")
         self.company_filter.setClearButtonEnabled(True)
 
         self._companies_model = QStandardItemModel()
@@ -525,7 +319,7 @@ class MainWindow(QMainWindow):
         cp_outer = QVBoxLayout(companies_pane)
         cp_outer.setContentsMargins(0, 0, 0, 0)
         cp_outer.setSpacing(0)
-        cp_hdr = QLabel("COMPANIES")
+        cp_hdr = QLabel("MODELS")
         cp_hdr.setObjectName("section-header")
         cp_outer.addWidget(cp_hdr)
         cp_inner = QWidget()
@@ -551,22 +345,97 @@ class MainWindow(QMainWindow):
         self.table = FrozenPaneTable()
         self._default_freeze = (1, 1)  # header row + label column
 
-        # ---- Splitter ----
+        sheets_pane.setParent(self)
+        sheets_pane.hide()
+
+        self._document_title = QLabel("Valuation models")
+        self._document_title.setObjectName("document-title")
+        self._document_title.setTextFormat(Qt.PlainText)
+        self._cell_address = QLineEdit()
+        self._cell_address.setObjectName("cell-address")
+        self._cell_address.setFixedWidth(84)
+        self._cell_address.setPlaceholderText("A1")
+        self._cell_address.setAccessibleName("Go to cell")
+        self._cell_address.returnPressed.connect(self._go_to_cell)
+        self._cell_value = QLineEdit()
+        self._cell_value.setObjectName("cell-value")
+        self._cell_value.setReadOnly(True)
+        self._cell_value.setPlaceholderText("Select a cell to inspect its value")
+        self._cell_value.setAccessibleName("Selected cell value")
+        cell_bar = QWidget()
+        cell_bar.setObjectName("cell-bar")
+        cell_layout = QHBoxLayout(cell_bar)
+        cell_layout.setContentsMargins(0, 8, 0, 8)
+        cell_layout.setSpacing(8)
+        cell_layout.addWidget(self._cell_address)
+        cell_layout.addWidget(self._cell_value, 1)
+
+        self.sheet_tabs = QTabBar()
+        self.sheet_tabs.setObjectName("sheet-tabs")
+        self.sheet_tabs.setExpanding(False)
+        self.sheet_tabs.setUsesScrollButtons(True)
+        self.sheet_tabs.setElideMode(Qt.ElideRight)
+        self.sheet_tabs.setAccessibleName("Workbook sheets")
+        self.sheet_tabs.currentChanged.connect(self._on_sheet_tab_changed)
+        self._sheets_proxy.modelReset.connect(self._sync_sheet_tabs)
+        self._sheets_proxy.rowsInserted.connect(self._sync_sheet_tabs)
+        self._sheets_proxy.rowsRemoved.connect(self._sync_sheet_tabs)
+        self.sheet_filter.textChanged.connect(self._sync_sheet_tabs)
+        self.sheet_filter.setMaximumWidth(180)
+        self.sheet_filter.setPlaceholderText("Find a sheet…")
+        sheet_bar = QWidget()
+        sheet_bar.setObjectName("sheet-bar")
+        sheet_layout = QHBoxLayout(sheet_bar)
+        sheet_layout.setContentsMargins(0, 6, 0, 0)
+        sheet_layout.setSpacing(12)
+        sheet_layout.addWidget(self.sheet_tabs, 1)
+        sheet_layout.addWidget(self.sheet_filter)
+
+        empty = QWidget()
+        empty.setObjectName("empty-state")
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.addStretch()
+        heading = QLabel("A clearer view of your models.")
+        heading.setObjectName("empty-heading")
+        heading.setAlignment(Qt.AlignCenter)
+        description = QLabel("Open an Excel workbook or a folder of company models.")
+        description.setObjectName("empty-description")
+        description.setAlignment(Qt.AlignCenter)
+        open_button = QPushButton("Open workbook")
+        open_button.setObjectName("primary-button")
+        open_button.clicked.connect(self._open_file_dialog)
+        empty_layout.addWidget(heading)
+        empty_layout.addWidget(description)
+        empty_layout.addSpacing(16)
+        empty_layout.addWidget(open_button, 0, Qt.AlignHCenter)
+        empty_layout.addStretch()
+        self._sheet_stack = QStackedWidget()
+        self._sheet_stack.setObjectName("sheet-surface")
+        self._sheet_stack.addWidget(empty)
+        self._sheet_stack.addWidget(self.table)
+
+        workspace = QWidget()
+        workspace.setObjectName("workspace")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(20, 16, 20, 12)
+        workspace_layout.setSpacing(0)
+        workspace_layout.addWidget(self._document_title)
+        workspace_layout.addWidget(cell_bar)
+        workspace_layout.addWidget(self._sheet_stack, 1)
+        workspace_layout.addWidget(sheet_bar)
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(companies_pane)
-        splitter.addWidget(sheets_pane)
-        splitter.addWidget(self.table)
+        splitter.addWidget(workspace)
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 0)
-        splitter.setStretchFactor(2, 1)
-        splitter.setSizes([260, 200, 1040])
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([230, 1210])
         splitter.setChildrenCollapsible(False)
         self._splitter = splitter
-        self._nav_widgets = (companies_pane, sheets_pane)
+        self._nav_widgets = (companies_pane,)
         self.setCentralWidget(splitter)
 
         # ---- Menu ----
-        open_file = QAction("Open &File…", self)
+        open_file = QAction("Open &workbook…", self)
         open_file.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         open_file.setShortcut(QKeySequence.Open)
         open_file.triggered.connect(self._open_file_dialog)
@@ -576,7 +445,7 @@ class MainWindow(QMainWindow):
         open_folder.setShortcut("Ctrl+Shift+O")
         open_folder.triggered.connect(self._open_folder_dialog)
 
-        self._compare_action = QAction("&Compare Selected Cells…", self)
+        self._compare_action = QAction("&Compare cells…", self)
         self._compare_action.setShortcut("Ctrl+Shift+C")
         self._compare_action.triggered.connect(self._compare_selected)
 
@@ -656,13 +525,14 @@ class MainWindow(QMainWindow):
 
         # ---- Status bar ----
         self._status = QLabel(
-            "No file loaded — open a folder (Ctrl+Shift+O), a .zip of models, or a single .xlsx (Ctrl+O); drag & drop also works"
+            "Open a workbook or folder · Drag and drop supported"
         )
         self.statusBar().addWidget(self._status, 1)  # stretch=1 takes all left space
 
         # Preload progress widget: "Loading 42%  [====    ]"
         self._cache_label = QLabel("")
         self._cache_label.setMinimumWidth(120)
+        self._cache_label.setVisible(_PRELOAD_MAX_FILES > 0)
         self._preload_bar = QProgressBar()
         self._preload_bar.setTextVisible(False)
         self._preload_bar.setFixedWidth(140)
@@ -694,28 +564,55 @@ class MainWindow(QMainWindow):
         toolbar.addAction(open_folder)
         toolbar.addAction(self._compare_action)
 
-        spacer = QWidget()
-        spacer.setObjectName("toolbar-spacer")
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        toolbar.addWidget(spacer)
-
-        theme_label = QLabel("Theme")
-        theme_label.setObjectName("toolbar-label")
-        self._theme_combo = QComboBox()
-        self._theme_combo.setMinimumWidth(132)
-        self._theme_combo.setObjectName("theme-combo")
-        for key in THEME_ORDER:
-            self._theme_combo.addItem(THEMES[key]["label"], key)
-        self._theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
-
-        self._dark_toggle = QCheckBox("Dark")
-        self._dark_toggle.setObjectName("dark-toggle")
-        self._dark_toggle.toggled.connect(self._set_dark_mode)
-
-        toolbar.addWidget(theme_label)
-        toolbar.addWidget(self._theme_combo)
-        toolbar.addWidget(self._dark_toggle)
+        brand = QLabel("Theia")
+        brand.setObjectName("app-brand")
+        toolbar.insertWidget(toolbar.actions()[0], brand)
         self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+    def _sync_sheet_tabs(self, *_):
+        current = self.sheet_list.currentIndex()
+        name = self._sheets_proxy.data(current, Qt.DisplayRole) if current.isValid() else None
+        with QSignalBlocker(self.sheet_tabs):
+            while self.sheet_tabs.count():
+                self.sheet_tabs.removeTab(0)
+            for row in range(self._sheets_proxy.rowCount()):
+                label = str(self._sheets_proxy.data(self._sheets_proxy.index(row, 0)))
+                index = self.sheet_tabs.addTab(label)
+                self.sheet_tabs.setTabToolTip(index, label)
+                if label == name:
+                    self.sheet_tabs.setCurrentIndex(index)
+        if self.sheet_tabs.count() and not self.sheet_list.currentIndex().isValid():
+            self.sheet_list.setCurrentIndex(self._sheets_proxy.index(self.sheet_tabs.currentIndex(), 0))
+
+    def _on_sheet_tab_changed(self, index):
+        if index >= 0:
+            self.sheet_list.setCurrentIndex(self._sheets_proxy.index(index, 0))
+
+    def _update_cell_value(self, current, previous=None):
+        model = self.table.model()
+        if model is None or not current.isValid():
+            self._cell_address.clear()
+            self._cell_value.clear()
+            return
+        self._cell_address.setText(f"{_col_letter(current.column())}{current.row() + 1}")
+        self._cell_value.setText(str(model.data(current, Qt.DisplayRole) or ""))
+        self._cell_value.setCursorPosition(0)
+
+    def _go_to_cell(self):
+        match = re.fullmatch(r"([A-Za-z]+)([1-9]\d*)", self._cell_address.text().strip())
+        model = self.table.model()
+        if not match or model is None:
+            return
+        column = 0
+        for letter in match[1].upper():
+            column = column * 26 + ord(letter) - ord("A") + 1
+        row, column = int(match[2]) - 1, column - 1
+        if row >= model.rowCount() or column >= model.columnCount():
+            self._status.setText("That cell is outside this sheet")
+            return
+        index = model.index(row, column)
+        self.table.br.selectionModel().setCurrentIndex(index, QItemSelectionModel.ClearAndSelect)
+        self.table.br.scrollTo(index)
 
     def _on_theme_combo_changed(self, index: int):
         if self._theme_combo is None:
@@ -754,8 +651,8 @@ class MainWindow(QMainWindow):
                 widget.setVisible(self._sidebar_visible)
         if self._splitter is not None and self._sidebar_visible:
             sizes = self._splitter.sizes()
-            if len(sizes) >= 3 and sizes[0] == 0 and sizes[1] == 0:
-                self._splitter.setSizes([260, 200, max(700, sizes[2])])
+            if len(sizes) == 2 and sizes[0] == 0:
+                self._splitter.setSizes([230, max(700, sizes[1])])
         if hasattr(self, "_sidebar_action"):
             with QSignalBlocker(self._sidebar_action):
                 self._sidebar_action.setChecked(self._sidebar_visible)
@@ -871,13 +768,10 @@ class MainWindow(QMainWindow):
     def _populate(self, items: list[tuple[str, str, str, Source]], root_label: str, skipped: int = 0):
         """items = [(collection, group, label, source), ...]. Builds the
         three-level tree model (collection -> group -> company) and resets state."""
-        for worker in (self._preload_worker, self._warmer):
+        for worker in (self._preload_worker,):
             if worker is not None:
                 worker.requestInterruption()
                 worker.wait()
-        if self._warmer is not None:
-            self._warmer.deleteLater()
-        self._warmer = None
         self._start_preload([])
         for wb in self._workbooks.values():
             wb.close()
@@ -891,6 +785,10 @@ class MainWindow(QMainWindow):
         self._companies_model.clear()
         self._sheets_model.setStringList([])
         self.table.setModel(None)
+        self._sheet_stack.setCurrentIndex(0)
+        self._document_title.setText("Valuation models")
+        self._cell_address.clear()
+        self._cell_value.clear()
 
         if not items:
             tail = f" ({skipped} temporary files skipped)" if skipped else ""
@@ -904,48 +802,30 @@ class MainWindow(QMainWindow):
         root = self._companies_model.invisibleRootItem()
         for collection in sorted(by_collection):
             groups = by_collection[collection]
-            n_in_collection = sum(len(v) for v in groups.values())
-            b_item = QStandardItem(f"{collection}   ({n_in_collection})")
-            b_item.setEditable(False)
-            b_item.setSelectable(False)
-            bf = b_item.font(); bf.setBold(True); bf.setPointSize(bf.pointSize() + 1)
-            b_item.setFont(bf)
-            root.appendRow(b_item)
-
+            collection_parent = root
+            if not collection.startswith("("):
+                collection_parent = QStandardItem(collection)
+                collection_parent.setEditable(False)
+                collection_parent.setSelectable(False)
+                root.appendRow(collection_parent)
             for group in sorted(groups):
-                companies = sorted(groups[group], key=lambda x: x[0])
-                a_item = QStandardItem(f"{group}   ({len(companies)})")
-                a_item.setEditable(False)
-                a_item.setSelectable(False)
-                af = a_item.font(); af.setBold(True)
-                a_item.setFont(af)
-                a_item.setForeground(QColor("#57606a"))
-                b_item.appendRow(a_item)
-
-                for label, source in companies:
-                    c_item = QStandardItem(label)
-                    c_item.setEditable(False)
-                    c_item.setData(source, Qt.UserRole)
-                    a_item.appendRow(c_item)
-
+                parent = collection_parent
+                if not group.startswith("("):
+                    parent = QStandardItem(group)
+                    parent.setEditable(False)
+                    parent.setSelectable(False)
+                    collection_parent.appendRow(parent)
+                for label, source in sorted(groups[group], key=lambda item: item[0]):
+                    item = QStandardItem(label)
+                    item.setEditable(False)
+                    item.setData(source, Qt.UserRole)
+                    parent.appendRow(item)
         self.company_tree.expandAll()
-
-        n_groups = sum(len(v) for v in by_collection.values())
-        note = f" ({skipped} temporary files skipped)" if skipped else ""
-        self._status.setText(
-            f"{root_label}{note}   ·   {len(items)} file{'s' if len(items) != 1 else ''}"
-            f" across {n_groups} group{'s' if n_groups != 1 else ''}"
-            f" / {len(by_collection)} collection{'s' if len(by_collection) != 1 else ''}"
-        )
-
-        # Auto-select the first company (collection[0] -> group[0] -> company[0])
-        b_idx = self._companies_proxy.index(0, 0)
-        if b_idx.isValid():
-            a_idx = self._companies_proxy.index(0, 0, b_idx)
-            if a_idx.isValid():
-                c_idx = self._companies_proxy.index(0, 0, a_idx)
-                if c_idx.isValid():
-                    self.company_tree.setCurrentIndex(c_idx)
+        first = root.child(0)
+        while first is not None and first.rowCount():
+            first = first.child(0)
+        if first is not None:
+            self.company_tree.setCurrentIndex(self._companies_proxy.mapFromSource(first.index()))
 
         # Only warm a few first sheets; archive size must not determine RAM use.
         xlsx_paths = [src for _, _, _, src in items if isinstance(src, Path)]
@@ -1025,7 +905,7 @@ class MainWindow(QMainWindow):
             return
         source = item.data(Qt.UserRole)
         if source is None:
-            # Analyst (parent) node — selection model usually skips these
+            # Folder (parent) node — selection model usually skips these
             # because setSelectable(False), but defend just in case.
             return
         label = item.text()
@@ -1041,7 +921,7 @@ class MainWindow(QMainWindow):
                 self._current_source = None
                 return
             self._workbooks[source] = wb
-            while len(self._workbooks) > 3:
+            while len(self._workbooks) > 1:
                 _, old = self._workbooks.popitem(last=False)
                 old.close()
         self._current_wb = wb
@@ -1049,10 +929,9 @@ class MainWindow(QMainWindow):
         self._current_source = source
         visible = [s for s in wb.sheet_names if not _is_hidden_sheet(s)]
         self._sheets_model.setStringList(visible)
+        self.sheet_filter.clear()
         if visible:
             self.sheet_list.setCurrentIndex(self._sheets_proxy.index(0, 0))
-            # ② Start background warmer to pre-load Arrow models for all sheets
-            self._start_sheet_warmer(wb.path, visible)
         else:
             self.table.setModel(None)
             n_hidden = len(wb.sheet_names) - len(visible)
@@ -1063,8 +942,9 @@ class MainWindow(QMainWindow):
         if not current.isValid() or self._current_wb is None:
             return
         name = self._sheets_proxy.data(current, Qt.DisplayRole)
+        with QSignalBlocker(self.sheet_tabs):
+            self.sheet_tabs.setCurrentIndex(current.row())
         wb_path = self._current_wb.path
-        t0 = time.perf_counter()
 
         cache_key = (wb_path, name)
 
@@ -1072,13 +952,11 @@ class MainWindow(QMainWindow):
         cached_entry = _lru_get(self._sheet_model_cache, cache_key)
         if cached_entry is not None:
             model, merged_cells, group_rows_0, group_cols_0 = cached_entry
-            elapsed_ms = (time.perf_counter() - t0) * 1000
             self._apply_model_to_table(model, merged_cells, group_rows_0, group_cols_0, cache_key)
             group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
             self._status.setText(
-                f"{wb_path.name}   ·   {name}   ·   "
                 f"{model.rowCount():,} rows × {model.columnCount()} cols"
-                f"{group_note}   ·   {elapsed_ms:.1f} ms (model-cache)"
+                f"{group_note}"
             )
             return
 
@@ -1088,7 +966,6 @@ class MainWindow(QMainWindow):
             merged_cells = arrow_model.merged_cells
             group_rows_0 = {r - 1 for r in arrow_model.row_outlines}
             group_cols_0 = {c - 1 for c in arrow_model.col_outlines}
-            elapsed_ms = (time.perf_counter() - t0) * 1000
             _lru_put(
                 self._sheet_model_cache,
                 cache_key,
@@ -1098,9 +975,8 @@ class MainWindow(QMainWindow):
             self._apply_model_to_table(arrow_model, merged_cells, group_rows_0, group_cols_0, cache_key)
             group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
             self._status.setText(
-                f"{wb_path.name}   ·   {name}   ·   "
                 f"{arrow_model.rowCount():,} rows × {arrow_model.columnCount()} cols"
-                f"{group_note}   ·   {elapsed_ms:.1f} ms (arrow)"
+                f"{group_note}"
             )
             return
 
@@ -1109,7 +985,6 @@ class MainWindow(QMainWindow):
         cached_rows = file_cache.get(name) if file_cache is not None else None
         if cached_rows is not None:
             rows = cached_rows
-            load_src = "cache"
         else:
             try:
                 sheet = self._current_wb.load_sheet(name)
@@ -1117,9 +992,7 @@ class MainWindow(QMainWindow):
                 self._status.setText(f"Failed to load sheet '{name}': {e}")
                 return
             rows = sheet.rows
-            load_src = "disk"
 
-        elapsed_ms = (time.perf_counter() - t0) * 1000
         sc = self._sidecar_for(name)
         row_fmt = {int(k): v for k, v in sc.get("row_formats", {}).items()}
         cell_fmt = {
@@ -1129,6 +1002,9 @@ class MainWindow(QMainWindow):
         hidden_rows = set(sc.get("hidden_rows", []))
         hidden_cols = set(sc.get("hidden_cols", []))
         merged_cells = sc.get("merged_cells", [])
+        if not merged_cells:
+            merged_cells = [f"{_col_letter(c1)}{r1 + 1}:{_col_letter(c2)}{r2 + 1}"
+                            for (r1, c1), (r2, c2) in self._current_wb.sheets[name].merged_cells]
         row_outlines = {int(k): v for k, v in sc.get("row_outlines", {}).items()}
         col_outlines = {int(k): v for k, v in sc.get("col_outlines", {}).items()}
         group_rows_0 = {r - 1 for r in row_outlines}
@@ -1152,9 +1028,8 @@ class MainWindow(QMainWindow):
         self._apply_model_to_table(model, merged_cells, group_rows_0, group_cols_0, cache_key)
         group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
         self._status.setText(
-            f"{wb_path.name}   ·   {name}   ·   "
             f"{model.rowCount():,} rows × {model.columnCount()} cols"
-            f"{group_note}   ·   {elapsed_ms:.1f} ms ({load_src})"
+            f"{group_note}"
         )
 
     _CHAR_PX = 7  # approx px per character at 12-13px Segoe UI
@@ -1162,33 +1037,34 @@ class MainWindow(QMainWindow):
 
     def _apply_model_to_table(self, model, merged_cells, group_rows_0, group_cols_0, cache_key):
         """③ Swap in a new model while suppressing intermediate viewport repaints."""
+        self._sheet_stack.setCurrentIndex(1)
+        self._document_title.setText(self._current_label or "Valuation model")
+        self._document_title.setToolTip(str(self._current_wb.path))
         for v in self.table._views():
             v.setUpdatesEnabled(False)
         try:
             self.table.setModel(model)
+            selection = self.table.br.selectionModel()
+            selection.currentChanged.connect(self._update_cell_value)
+            if model.rowCount() and model.columnCount():
+                selection.setCurrentIndex(model.index(0, 0), QItemSelectionModel.ClearAndSelect)
             self.table.setMergedCells(merged_cells)
             self.table.setGroups(group_rows_0, group_cols_0)
             self._autosize_columns(model, cache_key)
             fr, fc = self._default_freeze
+            # An automatic freeze must not split a merged title across views.
+            for area in merged_cells:
+                parsed = _parse_excel_range(area)
+                if parsed is not None:
+                    row, col, rows, cols = parsed
+                    if row < fr < row + rows:
+                        fr = row
+                    if col < fc < col + cols:
+                        fc = col
             self.table.setFreeze(min(fr, model.rowCount()), min(fc, model.columnCount()))
         finally:
             for v in self.table._views():
                 v.setUpdatesEnabled(True)
-
-    def _start_sheet_warmer(self, wb_path: Path, sheet_names: list):
-        """② Start background thread to pre-load Arrow models for all sheets."""
-        if self._warmer is not None:
-            self._warmer.requestInterruption()
-            self._warmer.wait()
-            self._warmer.deleteLater()
-            self._warmer = None
-        if ArrowSheetModel is None or not sheet_names:
-            return
-        warmer = _SheetWarmer(
-            wb_path, sheet_names, self._sheet_model_cache, _SHEET_MODEL_CACHE_MAXSIZE, self
-        )
-        self._warmer = warmer
-        warmer.start()
 
     def _autosize_columns(self, model, cache_key: tuple):
         """Estimate column widths and cache per sheet.
@@ -1201,7 +1077,7 @@ class MainWindow(QMainWindow):
             return
         # Fast path: Arrow model carries pre-baked widths from the sidecar writer.
         if hasattr(model, "col_widths") and model.col_widths:
-            self._col_width_cache[cache_key] = model.col_widths
+            _lru_put(self._col_width_cache, cache_key, model.col_widths, 8)
             self.table.setColumnWidths(model.col_widths)
             return
         # Slow path: measure from raw_value (SheetModel fallback)
@@ -1223,7 +1099,7 @@ class MainWindow(QMainWindow):
                         max_len = max(max_len, len(s))
             w = min(max(max_len * self._CHAR_PX + 8, _MIN_COL_W), _MAX_COL_W)
             widths.append(w)
-        self._col_width_cache[cache_key] = widths
+        _lru_put(self._col_width_cache, cache_key, widths, 8)
         self.table.setColumnWidths(widths)
 
     def _is_overflow_width_candidate(self, model, row: int, col: int, value) -> bool:
@@ -1247,14 +1123,15 @@ class MainWindow(QMainWindow):
 
         The safe name formula must match the sidecar writer:
         re.sub(r'[^\\w\\-]', '_', sheet_name)."""
-        if ArrowSheetModel is None:
-            return None
+        global ArrowSheetModel
         safe = re.sub(r"[^\w\-]", "_", sheet_name)
         arrow_path = wb_path.parent / f"{wb_path.stem}.{safe}.arrow"
         if not arrow_path.exists():
             return None
         try:
             import pyarrow as pa
+            if ArrowSheetModel is None:
+                from theia.arrow_model import ArrowSheetModel
             mmap = pa.memory_map(str(arrow_path), "r")
             reader = pa.ipc.open_file(mmap)
             batch = reader.get_batch(0)
@@ -1275,7 +1152,7 @@ class MainWindow(QMainWindow):
                 data = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else {}
             except Exception:
                 data = {}
-            self._sidecar_cache[wb_path] = data
+            _lru_put(self._sidecar_cache, wb_path, data, 2)
         return self._sidecar_cache[wb_path].get("sheets", {}).get(sheet_name, {})
 
     def _freeze_at_selection(self):
@@ -1405,7 +1282,7 @@ class MainWindow(QMainWindow):
             if dialog.worker is not None:
                 dialog.worker.cancel()
                 dialog.worker.wait()
-        for worker in (self._preload_worker, self._warmer):
+        for worker in (self._preload_worker,):
             if worker is not None:
                 worker.requestInterruption()
                 worker.wait()
@@ -1418,9 +1295,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Theia")
     app.setStyle("Fusion")
-    app.setStyleSheet(build_stylesheet("midnight", True))
+    app.setStyleSheet(build_stylesheet("theia", False))
 
-    font: QFont = QFont("Arial")
+    font = QFontDatabase.systemFont(QFontDatabase.GeneralFont)
     default_size = app.font().pointSize()
     if default_size > 0:
         font.setPointSize(max(9, default_size - 1))

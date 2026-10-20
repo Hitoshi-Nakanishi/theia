@@ -17,6 +17,7 @@ class Sheet:
     name: str
     rows: list[list] = field(default_factory=list)
     loaded: bool = False
+    merged_cells: list = field(default_factory=list)
 
 
 class Workbook:
@@ -54,11 +55,13 @@ class Workbook:
     def load_sheet(self, name: str) -> Sheet:
         sheet = self.sheets[name]
         if not sheet.loaded:
-            sheet.rows = self._cal.get_sheet_by_name(name).to_python(skip_empty_area=False)
+            source_sheet = self._cal.get_sheet_by_name(name)
+            sheet.rows = source_sheet.to_python(skip_empty_area=False)
+            sheet.merged_cells = source_sheet.merged_cell_ranges or []
             sheet.loaded = True
         self._loaded[name] = None
         self._loaded.move_to_end(name)
-        while len(self._loaded) > 3:
+        while len(self._loaded) > 1:
             old, _ = self._loaded.popitem(last=False)
             self.sheets[old].rows = []
             self.sheets[old].loaded = False

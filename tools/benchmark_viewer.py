@@ -53,7 +53,7 @@ def prepare(folder):
 def run(args):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     started = time.perf_counter()
-    from PySide6.QtCore import QSettings, Qt
+    from PySide6.QtCore import QCoreApplication, QEvent, QSettings, Qt
     from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QFont, QFontDatabase
     from theia.app import MainWindow
@@ -86,6 +86,7 @@ def run(args):
             window.sheet_list.setCurrentIndex(window._sheets_proxy.index(row, 0))
             app.processEvents()
         timings.append((time.perf_counter() - started) * 1000)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     result.update(companies=len(companies), sheets_per_company=3, rows_per_sheet=1501, columns=16,
                   company_median_ms=statistics.median(timings), company_p95_ms=sorted(timings)[int(len(timings)*.95)],
                   visited_mib=resident_mib(), workbook_cache=len(window._workbooks), model_cache=len(window._sheet_model_cache))

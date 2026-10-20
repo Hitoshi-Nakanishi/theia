@@ -25,7 +25,7 @@ class Theme(TypedDict):
     dark: Palette
 
 
-THEME_ORDER = ("midnight", "aurora", "ember")
+THEME_ORDER = ("theia", "midnight", "aurora", "ember")
 
 THEMES: dict[str, Theme] = {
     "midnight": {
@@ -129,27 +129,45 @@ THEMES: dict[str, Theme] = {
     },
 }
 
+THEMES["theia"] = {
+    "label": "Theia",
+    "light": {
+        "bg": "#fafaf9", "surface": "#ffffff", "surface_2": "#f4f4f3",
+        "border": "#e5e5e3", "text": "#202123", "muted": "#6b6c70",
+        "accent": "#108568", "accent_dark": "#0d7058", "accent_soft": "#e6f3ee",
+        "danger": "#c83c4a", "ok": "#108568", "disabled_bg": "#f1f1ef", "disabled_fg": "#a8aaa7",
+    },
+    "dark": {
+        "bg": "#212121", "surface": "#272727", "surface_2": "#303030",
+        "border": "#3c3c3c", "text": "#ececec", "muted": "#a9a9a9",
+        "accent": "#10a37f", "accent_dark": "#0d886a", "accent_soft": "#173e33",
+        "danger": "#ef8088", "ok": "#5bd2ae", "disabled_bg": "#303030", "disabled_fg": "#707070",
+    },
+}
+
+
 def palette_for(theme: str, dark_mode: bool) -> Palette:
-    theme_key = theme if theme in THEMES else "midnight"
+    theme_key = theme if theme in THEMES else "theia"
     mode = "dark" if dark_mode else "light"
     return THEMES[theme_key][mode]
 
 
 def build_stylesheet(theme: str, dark_mode: bool) -> str:
     p = palette_for(theme, dark_mode)
-    selected_text = "#ffffff" if dark_mode else "#ffffff"
+    selected_text = "#ffffff"
+    selected_label = p["ok"] if dark_mode else p["accent_dark"]
     return f"""
 QMainWindow, QWidget {{
     background: {p["bg"]};
     color: {p["text"]};
-    font-family: Arial;
+    font-size: 13px;
 }}
 QToolBar#main-toolbar {{
     background: {p["surface"]};
     border: none;
     border-bottom: 1px solid {p["border"]};
     spacing: 6px;
-    padding: 8px 10px;
+    padding: 8px 16px;
 }}
 QToolBar#main-toolbar QWidget#toolbar-spacer {{
     background: transparent;
@@ -236,7 +254,7 @@ QTreeView, QListView {{
     background: {p["surface"]};
     color: {p["text"]};
     padding: 4px;
-    font-size: 12px;
+    font-size: 13px;
     outline: 0;
 }}
 QTreeView::item, QListView::item {{
@@ -246,12 +264,12 @@ QTreeView::item, QListView::item {{
 }}
 QTreeView::item:hover, QListView::item:hover {{ background: {p["surface_2"]}; }}
 QTreeView::item:selected, QListView::item:selected {{
-    background: {p["accent"]};
-    color: {selected_text};
+    background: {p["accent_soft"]};
+    color: {selected_label};
 }}
 QTreeView::branch {{ background: {p["surface"]}; }}
 QTableView {{
-    background: {p["bg"]};
+    background: {p["surface"]};
     alternate-background-color: {p["surface_2"]};
     color: {p["text"]};
     gridline-color: {p["border"]};
@@ -261,9 +279,9 @@ QTableView {{
     font-size: 12px;
 }}
 QHeaderView::section {{
-    background: {p["surface"]};
+    background: {p["surface_2"]};
     color: {p["muted"]};
-    padding: 6px 8px;
+    padding: 5px 8px;
     border: none;
     border-right: 1px solid {p["border"]};
     border-bottom: 1px solid {p["border"]};
@@ -330,4 +348,30 @@ QMenu {{
 QMenu::item {{ padding: 6px 20px 6px 12px; border-radius: 4px; font-size: 13px; }}
 QMenu::item:selected {{ background: {p["surface_2"]}; color: {p["text"]}; }}
 QMenu::separator {{ height: 1px; background: {p["border"]}; margin: 4px 0; }}
+
+QLabel#app-brand {{
+    font-size: 18px; font-weight: 600; padding: 0 26px 0 4px; background: transparent;
+}}
+QWidget#workspace {{ background: {p["bg"]}; }}
+QLabel#document-title {{ font-size: 20px; font-weight: 600; padding: 2px 0 4px 0; background: transparent; }}
+QWidget#cell-bar, QWidget#sheet-bar {{ background: transparent; }}
+QLineEdit#cell-address {{ background: {p["surface"]}; border-radius: 5px; padding: 6px 8px; }}
+QLineEdit#cell-value {{ background: {p["surface"]}; border-radius: 5px; padding: 6px 10px; }}
+QStackedWidget#sheet-surface {{ border: 1px solid {p["border"]}; background: {p["surface"]}; }}
+QWidget#empty-state {{ background: {p["surface"]}; }}
+QLabel#empty-heading {{ font-size: 25px; font-weight: 600; background: transparent; padding: 12px; }}
+QLabel#empty-description {{ color: {p["muted"]}; background: transparent; }}
+QPushButton#primary-button {{
+    background: {p["accent"]}; color: white; border: none; border-radius: 7px; padding: 10px 20px;
+}}
+QPushButton#primary-button:hover {{ background: {p["accent_dark"]}; }}
+QTabBar#sheet-tabs {{ background: transparent; }}
+QTabBar#sheet-tabs::tab {{
+    background: transparent; color: {p["muted"]}; border: none; border-bottom: 2px solid transparent;
+    padding: 9px 15px; margin-right: 2px; min-width: 40px;
+}}
+QTabBar#sheet-tabs::tab:selected {{
+    color: {selected_label}; border-bottom-color: {p["accent"]}; background: {p["accent_soft"]};
+}}
+QTabBar#sheet-tabs::tab:hover {{ background: {p["surface_2"]}; }}
 """

@@ -41,13 +41,14 @@ The viewer accepts drag-and-drop of files, zips, or folders.
 - Open a single Excel file, a folder, or a zip by menu, CLI argument, or drag-and-drop.
 - Open multiple Excel files together; folder and zip browsing accepts arbitrary filenames.
 - Compare selected cells across the files in the current companies filter, with numeric sorting and CSV export.
-- Switch between Midnight, Aurora, and Ember themes, with light and dark modes.
+- Use the neutral Theia theme or Midnight, Aurora, and Ember, with light and dark modes.
 - Toggle the navigation sidebar when the table needs the full window width.
 - Load pre-formatted `.arrow` sidecars when present for near-instant sheet display.
 - Render Excel-style number formats from sidecar metadata when available.
 - Preserve hidden rows/columns, merged cells, freeze panes, and outline groups.
-- Bound open workbooks to three, loaded sheets per workbook to three, and rendered sheet models to twelve.
-- Warm only the first visible sheet of up to three small files in the background.
+- Switch sheets with bottom tabs, inspect a selected cell, or jump directly to an address.
+- Keep one workbook and one decoded sheet open, with at most four recently rendered sheet models.
+- Load data on demand; metadata and column-width caches are bounded.
 - Optionally compile a small Cython extension, with a pure-Python fallback.
 
 ## Demo Workbook
@@ -114,28 +115,33 @@ and selectors, not workbook paths or extracted numbers. Keep private presets
 outside the public checkout. Matching a folder/group label in the companies
 filter includes its child files, so date-named folders can select an event month.
 
-## Performance Snapshot
+## Native Rendering And Performance
 
-The numbers below are from a local smoke run against the demo workbook on
-2026-07-04. They are intended as a repeatable baseline for this repository, not
-as production-archive performance claims.
+Theia uses native Qt widgets (C++) and the Rust-backed Calamine Excel parser.
+Python coordinates the interface and reads only requested sheets. No browser engine
+is embedded. Arrow is imported only when a display sidecar is actually opened.
 
-| Metric | Result |
-|---|---:|
-| Workbook size | 7,337 bytes |
-| Sheets / rows / populated cells | 4 / 46 / 248 |
-| Calamine workbook open, median / p95 | 0.15 ms / 0.29 ms |
-| Read every visible sheet, median / p95 | 0.22 ms / 0.34 ms |
-| Theia sheet display, median | 0.20 ms |
-| Measurement runs | 30 |
+A local Windows run on 2026-10-21 used 24 fictional workbooks, each with three
+1,501-row × 16-column sheets. Each company timing includes displaying all three
+sheets and processing UI events. Resident memory is the process working set.
 
-A separate synthetic comparison smoke run on 2026-10-20 used 120 workbooks,
-each with a 2,001-row × 24-column sheet (48,024 cells, about 289 KB per file).
-Extracting two cells across all 120 files took 3.03 seconds. Process working
-set was 86.1 MiB after opening the folder, 114.7 MiB after visiting all 120
-workbooks, and 119.2 MiB after comparison. Three workbooks and twelve sheet
-models remained cached. These local Windows measurements use generated data;
-larger or more complex workbooks can have different costs.
+| Measure | Previous layout | Current layout |
+|---|---:|---:|
+| Idle memory | 69.7 MiB | 59.6 MiB |
+| Memory after visiting every model | 94.0 MiB | 69.2 MiB |
+| Three-sheet company visit, median | 233.2 ms | 195.7 ms |
+| Three-sheet company visit, p95 | 258.3 ms | 223.8 ms |
+
+These are local measurements with synthetic data, not latency or memory guarantees.
+Repeat the same check with the viewer's virtual environment:
+
+```sh
+python tools/benchmark_viewer.py --prepare --fixture build/benchmark-models
+python tools/benchmark_viewer.py --fixture build/benchmark-models --output build/result.json
+```
+
+The test workflow covers Windows and macOS. This measurement was taken on Windows;
+macOS runtime and packaging still need verification on a Mac.
 
 ## Model Folders
 

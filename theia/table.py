@@ -485,6 +485,12 @@ class FrozenPaneTable(QWidget):
             for v in (self.tl, self.tr, self.bl):
                 v.setVisible(False)
             self.br.setVisible(True)
+        # Qt retains replaced selection models, including header models.
+        active = {owner.selectionModel() for view in self._views()
+                  for owner in (view, view.horizontalHeader(), view.verticalHeader())}
+        for selection in self.findChildren(QItemSelectionModel):
+            if selection not in active:
+                selection.deleteLater()
 
     def model(self):
         return self._model

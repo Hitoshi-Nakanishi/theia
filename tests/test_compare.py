@@ -138,7 +138,7 @@ class ComparisonTests(unittest.TestCase):
         with Workbook(path) as reader:
             for i in range(5):
                 self.assertEqual(reader.load_sheet(f"Sheet{i}").rows[0][0], i)
-            self.assertEqual(sum(s.loaded for s in reader.sheets.values()), 3)
+            self.assertEqual(sum(s.loaded for s in reader.sheets.values()), 1)
             self.assertEqual(reader.load_sheet("Sheet0").rows[0][0], 0)
 
     def test_match_labels_handles_different_history_lengths_and_row_positions(self):
@@ -295,7 +295,7 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(filtered.model.rowCount(), 1)
             filtered.close()
             window.open_files([self.reference, self.root / "Company_001.xlsx"])
-            self.assertEqual(window._companies_model.rowCount(), 1)
+            self.assertEqual(window._companies_model.rowCount(), 2)
             archive = self.root / "archive.zip"
             with zipfile.ZipFile(archive, "w") as z:
                 z.write(self.reference, "Company_archive.xlsx")
