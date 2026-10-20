@@ -15,25 +15,26 @@ Optional display metadata preserves spreadsheet formatting and speeds up loading
 
 ## Quick Start
 
-Install [Task](https://taskfile.dev/) and Python 3.11+.
+With [Task](https://taskfile.dev/) and Python 3.11+ installed, one command starts the viewer:
 
 ```sh
-cp .env.example .env       # Windows: copy .env.example .env
-# set THEIA_MODELS_PATH to the folder containing your valuation workbooks
-
-task install               # create .venv/ and install theia (editable)
-task run                   # open the configured model folder
+task run
 ```
 
-You can also open anything directly:
+The first run creates `.venv/` and installs Theia, which takes about half a minute; later runs open at once. `task run`
+opens the model folder. To open something else, put its path after `--`; a relative path is read from the directory you
+run `task` in:
 
 ```sh
-task run-path -- /path/to/a/workbook.xlsx
-task run-path -- /path/to/a/folder
-task run-path -- /path/to/models.zip
+task run -- examples/demo_models/0000.T_Demo_Model.xlsx
+task run -- /path/to/a/folder
+task run -- /path/to/models.zip
 ```
 
-The viewer accepts drag-and-drop of files, zips, or folders.
+The model folder is `THEIA_MODELS_PATH`, read from the environment or `.env`. To set it once, copy `.env.example` to
+`.env` (Windows: `copy .env.example .env`) and fill in the folder. When the folder does not exist, the window says which
+folder it looked for and offers **Open workbook** and **Open folder**. Files, folders, and zips can also be dropped onto
+the window.
 
 ## Features
 
@@ -58,7 +59,7 @@ The repository includes an anonymized workbook for smoke tests and README
 screenshots:
 
 ```sh
-task run-path -- examples/demo_models/0000.T_Demo_Model.xlsx
+task run -- examples/demo_models/0000.T_Demo_Model.xlsx
 ```
 
 The workbook and sidecar use fictional labels only. They do not contain source identifiers, client identifiers, or real holdings.
@@ -159,7 +160,7 @@ models/
 
 There is no required source or filename convention. Workbooks can be `.xlsx`,
 `.xls`, `.xlsm`, or `.xlsb`. Optional `.json` and `.arrow` display metadata can sit
-beside a workbook. Use `task run-path -- <path>` to open any file, folder, or zip.
+beside a workbook. Use `task run -- <path>` to open any file, folder, or zip.
 
 ## Keyboard Shortcuts
 
@@ -182,10 +183,10 @@ beside a workbook. Use `task run-path -- <path>` to open any file, folder, or zi
 | Command | What it does |
 |---|---|
 | `task` | List available tasks |
-| `task install` | Create `.venv/` and install `theia` editable |
+| `task install` | Create `.venv/` and install `theia` editable; `task run` does this on its first run |
 | `task paths` | Print the configured model folder |
 | `task run` | Launch the viewer on the configured model folder |
-| `task run-path -- <path>` | Launch the viewer on an explicit file, folder, or zip |
+| `task run -- <path>` | Launch the viewer on a file, folder, or zip (`task run-path` is the same command) |
 | `task build-cython` | Compile the optional native accelerator |
 | `task clean` | Remove `.venv/` and build artifacts |
 

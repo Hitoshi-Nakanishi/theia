@@ -1,6 +1,6 @@
 version: '3'
 
-# Model folder overrides come from .env; copy .env.example to get started.
+# THEIA_MODELS_PATH, the folder `task run` opens, comes from the environment or .env (see .env.example).
 dotenv: ['.env']
 
 vars:
@@ -16,11 +16,19 @@ tasks:
       - task --list
 
   install:
-    desc: Create venv and install theia editable
+    desc: Create .venv/ and install theia editable (`task run` does this on its first run)
     cmds:
       - python -m venv .venv
       - '{{.PY}} -m pip install -U pip'
       - '{{.PY}} -m pip install -e .'
+
+  venv:
+    internal: true
+    # Isolated mode leaves this checkout off sys.path, so the import succeeds only after a complete install.
+    status:
+      - '{{.PY}} -I -c "import theia"'
+    cmds:
+      - task: install
 
   build-cython:
     desc: 'Compile _arrow_fast.pyx Cython extension (optional; arrow_model falls back to pure Python)'
@@ -35,17 +43,17 @@ tasks:
         platforms: [darwin, linux]
 
   run:
-    desc: 'Launch Theia on the configured model folder'
+    desc: 'Open the model folder, or the workbook, folder or zip after `--` (example: task run -- models.zip)'
+    aliases: [run-path]
+    deps: [venv]
+    # A relative path after `--` is read from the directory `task` was called in.
+    dir: '{{.USER_WORKING_DIR}}'
     cmds:
-      - '{{.PY}} -m theia'
-
-  run-path:
-    desc: 'Launch Theia on an explicit file / folder / zip - pass with `task run-path -- <path>`'
-    cmds:
-      - '{{.PY}} -m theia {{.CLI_ARGS}}'
+      - '"{{.TASKFILE_DIR}}/{{.PY}}" -m theia {{.CLI_ARGS}}'
 
   paths:
     desc: 'Print the configured model folder'
+    deps: [venv]
     cmds:
       - '{{.PY}} -c "from theia.paths import models_root; print(models_root())"'
 
