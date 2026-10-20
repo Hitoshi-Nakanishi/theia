@@ -1429,6 +1429,6 @@ def main():
     w = MainWindow()
     w.show()
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else models_root()
-    if path.exists():
+    if len(sys.argv) > 1 or path.exists():
         w.open_path(path)
     sys.exit(app.exec())
