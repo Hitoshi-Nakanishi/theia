@@ -5,24 +5,31 @@ import tempfile
 import time
 import unittest
 import zipfile
+from dataclasses import asdict
 from io import BytesIO
 from pathlib import Path
-from xml.etree import ElementTree
-from dataclasses import asdict
+from unittest.mock import patch
+from xml.etree import ElementTree as ET
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from openpyxl import Workbook as ExcelWorkbook
 from PySide6.QtCore import QItemSelectionModel, QSettings, Qt
 from PySide6.QtWidgets import QApplication
-
+from theia.app import MainWindow
 from theia.compare import (
-    ComparisonDialog, ComparisonModel, ComparisonProxy, ComparisonRow,
-    ComparisonWorker, Metric, csv_value, export_csv,
-    cell_locator, load_preset,
+    ComparisonDialog,
+    ComparisonModel,
+    ComparisonProxy,
+    ComparisonRow,
+    ComparisonWorker,
+    Metric,
+    cell_locator,
+    csv_value,
+    export_csv,
+    load_preset,
 )
 from theia.workbook import Workbook
-
 
 APP = QApplication.instance() or QApplication([])
 
@@ -54,6 +61,10 @@ class ComparisonTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        settings = QSettings(str(self.root / "settings.ini"), QSettings.IniFormat)
+        patcher = patch("theia.app.QSettings", return_value=settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.reference = self.root / "Company_000.xlsx"
         make_workbook(self.reference)
         self.metric = Metric("Revenue", 3, 2)
@@ -63,8 +74,13 @@ class ComparisonTests(unittest.TestCase):
         self.temp.cleanup()
 
     def extract(self, paths, metrics=None, check=True):
-        worker = ComparisonWorker([(p.stem if isinstance(p, Path) else "Archive", p) for p in paths],
-                                  self.reference, "Model", metrics or [self.metric], check)
+        worker = ComparisonWorker(
+            [(p.stem if isinstance(p, Path) else "Archive", p) for p in paths],
+            self.reference,
+            "Model",
+            metrics or [self.metric],
+            check,
+        )
         rows, errors = [], []
         worker.row_ready.connect(rows.append)
         worker.failed.connect(errors.append)
@@ -82,9 +98,12 @@ class ComparisonTests(unittest.TestCase):
     def test_missing_mismatched_zero_and_formula_values(self):
         paths = []
         for name, kwargs in [
-            ("zero", {"value": 0}), ("negative", {"value": -2}),
-            ("mismatch", {"label": "Other"}), ("period", {"header": "FY2"}),
-            ("blank", {"value": None}), ("formula", {"value": "=2+3"}),
+            ("zero", {"value": 0}),
+            ("negative", {"value": -2}),
+            ("mismatch", {"label": "Other"}),
+            ("period", {"header": "FY2"}),
+            ("blank", {"value": None}),
+            ("formula", {"value": "=2+3"}),
             ("missing", {"sheet": "Other"}),
         ]:
             path = self.root / f"{name}.xlsx"
@@ -121,10 +140,10 @@ class ComparisonTests(unittest.TestCase):
             for info in source.infolist():
                 payload = source.read(info.filename)
                 if info.filename == "xl/worksheets/sheet1.xml":
-                    xml = ElementTree.fromstring(payload)
+                    xml = ET.fromstring(payload)
                     ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
                     xml.find(".//s:c[@r='C4']/s:v", ns).text = "5"
-                    payload = ElementTree.tostring(xml)
+                    payload = ET.tostring(xml)
                 target.writestr(info, payload)
         self.assertEqual(self.extract([path])[0].values, [5])
 
@@ -172,8 +191,9 @@ class ComparisonTests(unittest.TestCase):
         layout(mismatch, 4, 0, unit="other units")
         layout(duplicate, 3, 0, duplicate=True)
         metrics = [Metric("First forecast", 5, 4), Metric("Second forecast", 5, 5)]
-        worker = ComparisonWorker([(p.stem, p) for p in (shifted, mismatch, duplicate)],
-                                  reference, "Model", metrics, True, match_labels=True)
+        worker = ComparisonWorker(
+            [(p.stem, p) for p in (shifted, mismatch, duplicate)], reference, "Model", metrics, True, match_labels=True
+        )
         results, failures = [], []
         worker.row_ready.connect(results.append)
         worker.failed.connect(failures.append)
@@ -190,12 +210,15 @@ class ComparisonTests(unittest.TestCase):
             rows = wb.load_sheet("Model").rows
             saved = [Metric(m.title, m.row, m.col, cell_locator(rows, m)) for m in metrics]
         preset = self.root / "comparison.json"
-        preset.write_text(json.dumps({"version": 1, "sheet": "Model", "match_labels": True,
-                                      "metrics": [asdict(m) for m in saved]}), encoding="utf-8")
+        preset.write_text(
+            json.dumps({"version": 1, "sheet": "Model", "match_labels": True, "metrics": [asdict(m) for m in saved]}),
+            encoding="utf-8",
+        )
         sheet, loaded, match = load_preset(preset)
         results.clear()
-        worker = ComparisonWorker([("Shifted", shifted)], self.root / "absent_reference.xlsx",
-                                  sheet, loaded, True, match_labels=match)
+        worker = ComparisonWorker(
+            [("Shifted", shifted)], self.root / "absent_reference.xlsx", sheet, loaded, True, match_labels=match
+        )
         worker.row_ready.connect(results.append)
         worker.run()
         self.assertEqual(results[0].values, [100, 101])
@@ -250,8 +273,7 @@ class ComparisonTests(unittest.TestCase):
         APP.sendPostedEvents()
 
     def test_cancel_and_close_during_read(self):
-        dialog = ComparisonDialog([(str(i), self.reference) for i in range(500)],
-                                  self.reference, "Model", [self.metric])
+        dialog = ComparisonDialog([(str(i), self.reference) for i in range(500)], self.reference, "Model", [self.metric])
         dialog.show()
         dialog.cancel()
         wait_until(lambda: dialog.worker is None)
@@ -262,10 +284,6 @@ class ComparisonTests(unittest.TestCase):
         self.assertTrue(dialog._closing)
 
     def test_generic_folder_bounded_cache_and_source_navigation(self):
-        from theia.app import MainWindow
-
-        QSettings.setDefaultFormat(QSettings.IniFormat)
-        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(self.root / "settings"))
         for i in range(6):
             make_workbook(self.root / f"Company_{i:03}.xlsx", value=i)
         make_workbook(self.root / "~$temporary.xlsx")

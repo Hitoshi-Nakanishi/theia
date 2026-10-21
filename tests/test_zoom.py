@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -18,9 +19,10 @@ DEMO = Path(__file__).resolve().parents[1] / "examples/demo_models/0000.T_Demo_M
 class ZoomTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        QSettings.setDefaultFormat(QSettings.IniFormat)
-        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, self.temporary.name)
-        QSettings("Theia", "Theia").clear()
+        settings = QSettings(str(Path(self.temporary.name) / "settings.ini"), QSettings.IniFormat)
+        patcher = patch("theia.app.QSettings", return_value=settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.window = MainWindow()
         self.window.show()
         self.window.open_path(DEMO)

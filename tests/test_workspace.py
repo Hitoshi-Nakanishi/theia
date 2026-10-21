@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -21,9 +22,10 @@ class WorkspaceTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        QSettings.setDefaultFormat(QSettings.IniFormat)
-        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(self.root / "settings"))
-        QSettings("Theia", "Theia").clear()
+        settings = QSettings(str(self.root / "settings.ini"), QSettings.IniFormat)
+        patcher = patch("theia.app.QSettings", return_value=settings)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.window = MainWindow()
         self.window.show()
 
