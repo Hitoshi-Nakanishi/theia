@@ -56,7 +56,7 @@ class _FastCellDelegate(QStyledItemDelegate):
     _SEL = QStyle.StateFlag.State_Selected
     _ALT = QStyleOptionViewItem.ViewItemFeature.Alternate
     _ready = False  # set to True after first paint warms up the constants
-    _OVERFLOW_TEXT_MIN_CHARS = 24
+    _OVERFLOW_TEXT_MIN_CHARS = 16
     _OVERFLOW_MAX_COLS = 6
 
     def paint(self, painter, option, index):
@@ -152,7 +152,7 @@ class _FastCellDelegate(QStyledItemDelegate):
         if not self._is_empty(model.raw_value(row, col)):
             return False
         source_col = self._left_overflow_source(model, row, col)
-        if source_col is None:
+        if source_col is None or (option.widget is not None and option.widget.isColumnHidden(source_col)):
             return False
 
         clean_option = QStyleOptionViewItem(option)
@@ -174,7 +174,7 @@ class _FastCellDelegate(QStyledItemDelegate):
         if not hasattr(model, "raw_value"):
             return False
         source_col = self._left_overflow_source(model, row, col)
-        if source_col is None:
+        if source_col is None or (option.widget is not None and option.widget.isColumnHidden(source_col)):
             return False
         if hasattr(model, "_display_at"):
             text = model._display_at(row, source_col)

@@ -146,6 +146,9 @@ There is no required source or filename convention. Workbooks can be `.xlsx`, `.
 
 ## Keyboard Shortcuts
 
+Column widths follow the formatted values on screen, rather than the full precision of stored numbers. Long titles and notes can
+extend into adjacent empty cells. Choose **View > Fit column widths** to restore automatic widths after resizing.
+
 The bottom-right zoom slider and − / + buttons resize the entire interface from 50% to 200%, including the models list, menus,
 sheet tabs and cells. Click the percentage to return to 100%. The chosen zoom is remembered across launches.
 

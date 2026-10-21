@@ -3,6 +3,7 @@ import re
 import sys
 import time
 from collections import OrderedDict
+from math import ceil
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -16,7 +17,16 @@ from PySide6.QtCore import (
     QThread,
     Signal,
 )
-from PySide6.QtGui import QAction, QActionGroup, QFont, QFontDatabase, QKeySequence, QStandardItem, QStandardItemModel
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QFont,
+    QFontDatabase,
+    QFontMetricsF,
+    QKeySequence,
+    QStandardItem,
+    QStandardItemModel,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -526,6 +536,9 @@ class MainWindow(QMainWindow):
         view_menu.addAction(unfreeze)
         view_menu.addSeparator()
         view_menu.addAction(self._toggle_groups_act)
+        fit_columns = QAction("Fit column &widths", self)
+        fit_columns.triggered.connect(self._fit_columns)
+        view_menu.addAction(fit_columns)
         self._zoom_in_action = QAction("Zoom &in", self)
         self._zoom_in_action.setShortcuts(QKeySequence.keyBindings(QKeySequence.ZoomIn) + [QKeySequence("Ctrl+=")])
         self._zoom_in_action.triggered.connect(lambda: self._set_zoom(self._zoom_percent + 10))
@@ -1171,8 +1184,7 @@ class MainWindow(QMainWindow):
         group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
         self._status.setText(f"{model.rowCount():,} rows × {model.columnCount()} cols{group_note}")
 
-    _CHAR_PX = 7  # approx px per character at 12-13px Segoe UI
-    _OVERFLOW_TEXT_MIN_CHARS = 24
+    _OVERFLOW_TEXT_MIN_CHARS = 16
 
     def _apply_model_to_table(self, model, merged_cells, group_rows_0, group_cols_0, cache_key):
         """③ Swap in a new model while suppressing intermediate viewport repaints."""
@@ -1209,7 +1221,8 @@ class MainWindow(QMainWindow):
         """Estimate column widths and cache per sheet.
 
         Fast path: read pre-baked widths from Arrow metadata (zero Python iteration).
-        Slow path: measure from data via raw_value() (first 60 rows)."""
+        Slow path: measure displayed text in the current font (first 60 rows).
+        Cached widths are at 100%; zoom is applied by the table."""
         cached = self._col_width_cache.get(cache_key)
         if cached is not None:
             self.table.setColumnWidths(cached)
@@ -1223,9 +1236,12 @@ class MainWindow(QMainWindow):
         n_rows = model.rowCount()
         n_cols = model.columnCount()
         sample_n = min(60, n_rows)
+        metrics = QFontMetricsF(self.table.br.font())
+        scale = self._zoom_percent / 100
+        merged = self.table._merged_ranges
         widths = []
         for c in range(n_cols):
-            max_len = 0
+            width = _MIN_COL_W
             for r in range(sample_n):
                 v = model.raw_value(r, c)
                 if v is not None:
@@ -1233,13 +1249,25 @@ class MainWindow(QMainWindow):
                         continue
                     if self._is_overflow_width_candidate(model, r, c, v):
                         continue
-                    s = v if isinstance(v, str) else str(v)
-                    if s:
-                        max_len = max(max_len, len(s))
-            w = min(max(max_len * self._CHAR_PX + 8, _MIN_COL_W), _MAX_COL_W)
-            widths.append(w)
+                    if any(
+                        top <= r < top + height and left <= c < left + span and span > 1 for top, left, height, span in merged
+                    ):
+                        continue
+                    text = str(model.data(model.index(r, c), Qt.DisplayRole) or "")
+                    # The cell delegate uses three-pixel margins on each side.
+                    width = max(width, ceil(metrics.horizontalAdvance(text) / scale) + 12)
+            widths.append(min(width, _MAX_COL_W))
         _lru_put(self._col_width_cache, cache_key, widths, 8)
         self.table.setColumnWidths(widths)
+
+    def _fit_columns(self):
+        model = self.table.model()
+        if model is None or self._current_wb is None:
+            return
+        name = self._sheets_proxy.data(self.sheet_list.currentIndex(), Qt.DisplayRole)
+        key = self._current_wb.path, name
+        self._col_width_cache.pop(key, None)
+        self._autosize_columns(model, key)
 
     def _is_overflow_width_candidate(self, model, row: int, col: int, value) -> bool:
         if not isinstance(value, str):

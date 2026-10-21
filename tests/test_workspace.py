@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from openpyxl import Workbook as ExcelWorkbook
 from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, QSettings, Qt
+from PySide6.QtGui import QAction, QFontMetricsF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from theia.app import MainWindow
@@ -117,6 +118,57 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIsNone(self.window._preload_worker)
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         self.assertEqual(len(self.window.table.findChildren(QItemSelectionModel)), 1)
+
+    def test_long_history_columns_fit_displayed_numbers_and_keep_labels_readable(self):
+        path = self.root / "Company_history.xlsx"
+        workbook = ExcelWorkbook()
+        sheet = workbook.active
+        sheet.title = "History"
+        sheet["A1"] = "Generated long-term financial statements"
+        sheet["C1"] = "Values in millions; highlighted periods are forecasts"
+        sheet["A3"], sheet["B3"] = "Metric", "Unit"
+        sheet["A6"], sheet["B6"] = "販売費・一般管理費", "百万円"
+        for column in range(3, 35):
+            sheet.cell(3, column, f"{1988 + column}-03")
+            sheet.cell(4, column, "Actual")
+            sheet.cell(6, column, 12345 + column)
+            sheet.cell(7, column, 0.12345678901234567)
+            sheet.cell(8, column, -0.01234567890123456)
+        workbook.save(path)
+        workbook.close()
+        self.window.open_path(path)
+        APP.processEvents()
+        table = self.window.table
+        numeric_widths = [table.columnWidth(c) for c in range(2, 34)]
+        self.assertTrue(all(60 <= width <= 100 for width in numeric_widths))
+        metrics = QFontMetricsF(table.br.font())
+        self.assertGreaterEqual(table.columnWidth(0), metrics.horizontalAdvance("販売費・一般管理費") + 6)
+        for column in range(2, 34):
+            for row in (2, 3, 5, 6, 7):
+                text = table.model().data(table.model().index(row, column), Qt.DisplayRole)
+                self.assertGreaterEqual(table.columnWidth(column), metrics.horizontalAdvance(text) + 6)
+        self.assertAlmostEqual(table.model().raw_value(6, 2), 0.12345678901234567, places=15)
+
+    def test_fit_columns_restores_content_widths_without_changing_selection_or_zoom(self):
+        self.window.open_path(self.make_model("Company"))
+        self.window._set_zoom(150)
+        self.window._fit_columns()
+        table = self.window.table
+        expected = table.columnWidth(1)
+        current, model = table.currentIndex(), table.model()
+        table.setColumnWidth(1, 220)
+        self.assertEqual(table.columnWidth(1), 330)
+        action = next(a for a in self.window.findChildren(QAction) if a.text() == "Fit column &widths")
+        action.trigger()
+        self.assertEqual(table.columnWidth(1), expected)
+        self.assertEqual(table.currentIndex(), current)
+        self.assertIs(table.model(), model)
+        self.assertEqual(self.window._zoom_percent, 150)
+
+    def test_merged_titles_do_not_expand_individual_columns(self):
+        self.window.open_path(self.make_model("Company"))
+        widths = [self.window.table.columnWidth(c) for c in range(4)]
+        self.assertTrue(all(width <= 100 for width in widths))
 
     def test_plain_workbooks_do_not_load_arrow_runtime(self):
         path = self.make_model("Plain")
