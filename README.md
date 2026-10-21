@@ -9,8 +9,8 @@ folders can also be opened from zip archives.
 
 ![Theia test screen](docs/assets/theia-screenshot.png)
 
-Everything runs locally against files on your own disk. Nothing is uploaded. Optional display metadata preserves spreadsheet
-formatting and speeds up loading.
+Everything runs locally against files on your own disk. Nothing is uploaded. Excel number formats, including percentages, are
+read directly from `.xlsx` and `.xlsm` workbooks. Optional display metadata can override those formats and speed up loading.
 
 ## Quick Start
 

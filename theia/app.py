@@ -1139,19 +1139,18 @@ class MainWindow(QMainWindow):
         # Fallback: calamine / preload-cache path.
         file_cache = _lru_get(self._preload_cache, wb_path)
         cached_rows = file_cache.get(name) if file_cache is not None else None
-        if cached_rows is not None:
-            rows = cached_rows
-        else:
-            try:
-                sheet = self._current_wb.load_sheet(name)
-            except Exception as e:
-                self._status.setText(f"Failed to load sheet '{name}': {e}")
-                return
-            rows = sheet.rows
+        try:
+            sheet = self._current_wb.load_sheet(name, cached_rows=cached_rows)
+            source_formats = self._current_wb.cell_formats(name)
+        except Exception as e:
+            self._status.setText(f"Failed to load sheet '{name}': {e}")
+            return
+        rows = sheet.rows
 
         sc = self._sidecar_for(name)
         row_fmt = {int(k): v for k, v in sc.get("row_formats", {}).items()}
-        cell_fmt = {tuple(int(p) for p in k.split(",")): v for k, v in sc.get("cell_formats", {}).items()}
+        cell_fmt = {cell: fmt for cell, fmt in source_formats.items() if cell[0] not in row_fmt}
+        cell_fmt.update({tuple(int(p) for p in k.split(",")): v for k, v in sc.get("cell_formats", {}).items()})
         hidden_rows = set(sc.get("hidden_rows", []))
         hidden_cols = set(sc.get("hidden_cols", []))
         merged_cells = sc.get("merged_cells", [])

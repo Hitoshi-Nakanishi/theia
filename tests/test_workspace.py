@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from PySide6.QtGui import QAction, QFontMetricsF
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 from theia.app import MainWindow
+from theia.workbook import Workbook
 
 APP = QApplication.instance() or QApplication([])
 
@@ -179,6 +181,91 @@ class WorkspaceTests(unittest.TestCase):
             "assert 'pyarrow' not in sys.modules; window.close()"
         )
         subprocess.run([sys.executable, "-c", code, str(path)], check=True, capture_output=True)
+
+    def make_formatted_model(self):
+        path = self.root / "Company_formats.xlsx"
+        workbook = ExcelWorkbook()
+        sheet = workbook.active
+        sheet.title = "Rates"
+        sheet.append(["Measure", "Value"])
+        for row, (label, value, fmt) in enumerate(
+            [
+                ("Planned profit growth", 0.125, "0.0%;[Red]-0.0%"),
+                ("Margin", -0.25, "0%"),
+                ("Growth", 0, "0.00%"),
+                ("Value per share", 0.1234, "0.00"),
+                ("Flag", True, "0%"),
+                ("Text", "12%", "0%"),
+                ("Uncalculated formula", "=1/8", "0.0%"),
+            ],
+            start=2,
+        ):
+            sheet.cell(row, 1, label)
+            sheet.cell(row, 2, value).number_format = fmt
+        amounts = workbook.create_sheet("Amounts")
+        amounts["A1"] = "Revenue"
+        amounts["B1"] = 1234.5
+        amounts["B1"].number_format = "#,##0.0"
+        workbook.save(path)
+        workbook.close()
+        return path
+
+    def test_source_number_formats_display_percentages_without_changing_values(self):
+        self.window.open_path(self.make_formatted_model())
+        model = self.window.table.model()
+        for row, expected in enumerate(["12.5%", "-25%", "0.00%", "0.12", "TRUE", "12%", ""], start=1):
+            self.assertEqual(model.data(model.index(row, 1), Qt.DisplayRole), expected)
+        self.assertEqual(model.raw_value(1, 1), 0.125)
+        self.assertEqual(model.raw_value(2, 1), -0.25)
+        self.window.table.setCurrentIndex(model.index(1, 1))
+        self.assertEqual(self.window._cell_value.text(), "12.5%")
+        self.window.sheet_tabs.setCurrentIndex(1)
+        model = self.window.table.model()
+        self.assertEqual(model.data(model.index(0, 1), Qt.DisplayRole), "1,234.5")
+        self.window.sheet_tabs.setCurrentIndex(0)
+        model = self.window.table.model()
+        self.assertEqual(model.data(model.index(1, 1), Qt.DisplayRole), "12.5%")
+
+    def test_source_formats_are_read_from_workbooks_inside_zip_archives(self):
+        path = self.make_formatted_model()
+        archive = self.root / "Models.zip"
+        with zipfile.ZipFile(archive, "w") as stream:
+            stream.write(path, "models/Company.xlsx")
+        self.window.open_path(archive)
+        model = self.window.table.model()
+        self.assertEqual(model.data(model.index(1, 1), Qt.DisplayRole), "12.5%")
+
+    def test_explicit_sidecar_formats_override_workbook_formats(self):
+        path = self.make_formatted_model()
+        path.with_suffix(".json").write_text(
+            json.dumps(
+                {
+                    "sheets": {
+                        "Rates": {
+                            "row_formats": {"2": "0.00%", "3": "0%"},
+                            "cell_formats": {"3,2": "0.0%"},
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.window.open_path(path)
+        model = self.window.table.model()
+        self.assertEqual(model.data(model.index(1, 1), Qt.DisplayRole), "12.50%")
+        self.assertEqual(model.data(model.index(2, 1), Qt.DisplayRole), "-25.0%")
+
+    def test_source_formats_are_lazy_and_evicted_with_sheet_data(self):
+        with Workbook(self.make_formatted_model()) as workbook:
+            first = workbook.load_sheet("Rates")
+            self.assertIsNone(workbook._number_formats)
+            self.assertIsNone(workbook._xlsx)
+            formats = workbook.cell_formats("Rates")
+            self.assertEqual(formats[(2, 2)], "0.0%;[Red]-0.0%")
+            self.assertIs(workbook.cell_formats("Rates"), formats)
+            workbook.load_sheet("Amounts")
+            self.assertIsNone(first.cell_formats)
+            self.assertEqual(workbook.cell_formats("Amounts")[(1, 2)], "#,##0.0")
 
     def test_arrow_display_metadata_is_loaded_when_present(self):
         # Load Arrow only for the fixture that needs display sidecars.
