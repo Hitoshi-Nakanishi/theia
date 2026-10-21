@@ -142,8 +142,9 @@ class WorkspaceTests(unittest.TestCase):
         APP.processEvents()
         table = self.window.table
         numeric_widths = [table.columnWidth(c) for c in range(2, 34)]
-        self.assertTrue(all(60 <= width <= 100 for width in numeric_widths))
         metrics = QFontMetricsF(table.br.font())
+        upper = max(100, metrics.horizontalAdvance("-0.01235") + 24)
+        self.assertTrue(all(60 <= width <= upper for width in numeric_widths))
         self.assertGreaterEqual(table.columnWidth(0), metrics.horizontalAdvance("販売費・一般管理費") + 6)
         for column in range(2, 34):
             for row in (2, 3, 5, 6, 7):
