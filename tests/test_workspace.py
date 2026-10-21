@@ -1,19 +1,18 @@
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from openpyxl import Workbook as ExcelWorkbook
 from PySide6.QtCore import QCoreApplication, QEvent, QItemSelectionModel, QSettings, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
-
 from theia.app import MainWindow
-
 
 APP = QApplication.instance() or QApplication([])
 
@@ -71,13 +70,40 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(self.window._nav_widgets[0].isVisible())
         self.assertTrue(self.window.sheet_tabs.isVisible())
 
+    def test_opening_and_go_to_cell_return_keyboard_focus_to_the_grid(self):
+        self.window.open_path(self.make_model("Company"))
+        APP.processEvents()
+        self.assertTrue(self.window.table.isAncestorOf(APP.focusWidget()))
+        QTest.keyClick(APP.focusWidget(), Qt.Key_Down)
+        QTest.keyClick(APP.focusWidget(), Qt.Key_Right)
+        self.assertEqual(self.window._cell_address.text(), "B2")
+        self.window._cell_address.setFocus()
+        self.window._cell_address.setText("A1")
+        QTest.keyClick(self.window._cell_address, Qt.Key_Return)
+        self.assertTrue(self.window.table.isAncestorOf(APP.focusWidget()))
+        QTest.keyClick(APP.focusWidget(), Qt.Key_Down)
+        self.assertEqual(self.window._cell_address.text(), "A2")
+
+    def test_clicking_a_sheet_tab_returns_keyboard_focus_to_the_grid(self):
+        self.window.open_path(self.make_model("Company"))
+        APP.processEvents()
+        QTest.mouseClick(self.window.sheet_tabs, Qt.LeftButton, pos=self.window.sheet_tabs.tabRect(1).center())
+        APP.processEvents()
+        self.assertEqual(self.window.sheet_tabs.currentIndex(), 1)
+        self.assertTrue(self.window.table.isAncestorOf(APP.focusWidget()))
+        QTest.keyClick(APP.focusWidget(), Qt.Key_Down)
+        self.assertEqual(self.window._cell_address.text(), "A2")
+
     def test_navigation_keeps_data_and_metadata_caches_bounded(self):
         for index in range(9):
             path = self.make_model(f"Company_{index}")
             path.with_suffix(".json").write_text(json.dumps({"sheets": {}}), encoding="utf-8")
         self.window.open_folder(self.root)
-        companies = [item for item in self.window._companies_model.findItems("*", Qt.MatchWildcard | Qt.MatchRecursive)
-                     if item.data(Qt.UserRole) is not None]
+        companies = [
+            item
+            for item in self.window._companies_model.findItems("*", Qt.MatchWildcard | Qt.MatchRecursive)
+            if item.data(Qt.UserRole) is not None
+        ]
         for item in companies:
             self.window.company_tree.setCurrentIndex(self.window._companies_proxy.mapFromSource(item.index()))
             for row in range(self.window.sheet_tabs.count()):
@@ -101,7 +127,8 @@ class WorkspaceTests(unittest.TestCase):
         subprocess.run([sys.executable, "-c", code, str(path)], check=True, capture_output=True)
 
     def test_arrow_display_metadata_is_loaded_when_present(self):
-        import pyarrow as pa
+        # Load Arrow only for the fixture that needs display sidecars.
+        import pyarrow as pa  # noqa: PLC0415
 
         path = self.make_model("With_metadata")
         batch = pa.record_batch([pa.array(["Prepared value"])], names=["v_0"])

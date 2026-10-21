@@ -5,8 +5,17 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QSignalBlocker, QSortFilterProxyModel, QStringListModel, QThread, Signal, QItemSelectionModel
-from PySide6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QStandardItem, QStandardItemModel, QFontDatabase
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QSettings,
+    QSignalBlocker,
+    QSortFilterProxyModel,
+    QStringListModel,
+    Qt,
+    QThread,
+    Signal,
+)
+from PySide6.QtGui import QAction, QActionGroup, QFont, QFontDatabase, QKeySequence, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,14 +31,15 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QStackedWidget,
     QTabBar,
-    QSplitter,
     QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
+from python_calamine import CalamineWorkbook
 
 from theia.compare import ComparisonDialog, Metric, load_preset
 from theia.model import SheetModel, _col_letter
@@ -57,6 +67,7 @@ def _setting_bool(settings: QSettings, key: str, default: bool) -> bool:
 def _setting_theme(settings: QSettings) -> str:
     value = str(settings.value("theme/name", "theia"))
     return value if value in THEMES else "theia"
+
 
 # Column width bounds when auto-sizing (px)
 _MIN_COL_W = 60
@@ -155,7 +166,7 @@ def _jp_label(stem: str) -> str | None:
     if not m:
         return None
     code = m.group(1)
-    rest = stem[: m.start()] + stem[m.end():]
+    rest = stem[: m.start()] + stem[m.end() :]
     rest = re.sub(r"[_\-/]+", " ", rest)
     rest = _NAME_NOISE_RE.sub(" ", rest)
     rest = re.sub(r"\b\d{6,8}\b", " ", rest)
@@ -169,7 +180,9 @@ def _is_hidden_sheet(name: str) -> bool:
     return any(p in low for p in _HIDDEN_SHEET_PATTERNS)
 
 
-def _make_pane(placeholder: str, title: str = "") -> tuple[QWidget, QLineEdit, QListView, QStringListModel, QSortFilterProxyModel]:
+def _make_pane(
+    placeholder: str, title: str = ""
+) -> tuple[QWidget, QLineEdit, QListView, QStringListModel, QSortFilterProxyModel]:
     """Helper: build a titled (filter + list) pane and return its widgets/models."""
     edit = QLineEdit()
     edit.setPlaceholderText(placeholder)
@@ -206,14 +219,14 @@ def _make_pane(placeholder: str, title: str = "") -> tuple[QWidget, QLineEdit, Q
     return container, edit, view, src_model, proxy
 
 
-_PRELOAD_MAX_ROWS = 200_000   # skip files above this total-row count (outlier guard)
+_PRELOAD_MAX_ROWS = 200_000  # skip files above this total-row count (outlier guard)
 
 
 class _PreloadWorker(QThread):
     """Warm the first visible sheet of a few small workbooks."""
 
     file_done = Signal(str, float, int, int)  # path, ms, n_sheets, n_rows
-    all_done  = Signal(int, int, float)        # n_total, n_loaded, total_ms
+    all_done = Signal(int, int, float)  # n_total, n_loaded, total_ms
 
     def __init__(self, paths: list, cache: OrderedDict, parent=None):
         super().__init__(parent)
@@ -221,7 +234,6 @@ class _PreloadWorker(QThread):
         self._cache = cache
 
     def run(self):
-        from python_calamine import CalamineWorkbook
         t_all = time.perf_counter()
         n_loaded = 0
         for path in self._paths:
@@ -288,7 +300,7 @@ class MainWindow(QMainWindow):
         self._preload_total = 0
 
         # Per-session caches cleared on folder reload
-        self._sidecar_cache: OrderedDict = OrderedDict()    # Path -> full sidecar JSON dict
+        self._sidecar_cache: OrderedDict = OrderedDict()  # Path -> full sidecar JSON dict
         self._col_width_cache: OrderedDict = OrderedDict()  # (Path, sheet_name) -> [int, ...]
 
         # Sheet model cache: (Path, sheet_name) -> (model, merged_cells, group_rows_0, group_cols_0)
@@ -399,8 +411,9 @@ class MainWindow(QMainWindow):
         self._sheet_stack.addWidget(self._build_empty_state())
         self._sheet_stack.addWidget(self.table)
         # The strip and the cell bar describe a sheet, so they show only while one is open.
-        self._sheet_stack.currentChanged.connect(lambda index: (sheet_strip.setVisible(index == 1),
-                                                                cell_bar.setVisible(index == 1)))
+        self._sheet_stack.currentChanged.connect(
+            lambda index: (sheet_strip.setVisible(index == 1), cell_bar.setVisible(index == 1))
+        )
         sheet_strip.hide()
         cell_bar.hide()
 
@@ -573,8 +586,7 @@ class MainWindow(QMainWindow):
         if root.is_dir():
             folder_note = f"Model folder: {root}"
         else:
-            folder_note = (f"Model folder {root} does not exist. "
-                           "Set THEIA_MODELS_PATH in .env, or open a workbook or folder.")
+            folder_note = f"Model folder {root} does not exist. Set THEIA_MODELS_PATH in .env, or open a workbook or folder."
         heading = QLabel("Open valuation models")
         heading.setObjectName("empty-heading")
         description = QLabel("Drop Excel files, a folder or a zip here, or choose one below.")
@@ -632,6 +644,7 @@ class MainWindow(QMainWindow):
     def _on_sheet_tab_changed(self, index):
         if index >= 0:
             self.sheet_list.setCurrentIndex(self._sheets_proxy.index(index, 0))
+            self.table.setCurrentIndex(self.table.currentIndex())
 
     def _update_cell_value(self, current, previous=None):
         model = self.table.model()
@@ -656,8 +669,7 @@ class MainWindow(QMainWindow):
             self._status.setText("That cell is outside this sheet")
             return
         index = model.index(row, column)
-        self.table.br.selectionModel().setCurrentIndex(index, QItemSelectionModel.ClearAndSelect)
-        self.table.br.scrollTo(index)
+        self.table.setCurrentIndex(index)
 
     def _on_theme_combo_changed(self, index: int):
         if self._theme_combo is None:
@@ -880,6 +892,7 @@ class MainWindow(QMainWindow):
         # Only warm a few first sheets; archive size must not determine RAM use.
         xlsx_paths = [src for _, _, _, src in items if isinstance(src, Path)]
         self._start_preload(xlsx_paths[:_PRELOAD_MAX_FILES])
+        self.table.setCurrentIndex(self.table.currentIndex())
 
     # ---- Preload ----
 
@@ -918,9 +931,7 @@ class MainWindow(QMainWindow):
         if self.sender() is not self._preload_worker:
             return
         self._preload_bar.setVisible(False)
-        self._cache_label.setText(
-            f"✓  {n_loaded}/{n_total} cached  ·  {total_ms / 1000:.0f}s"
-        )
+        self._cache_label.setText(f"✓  {n_loaded}/{n_total} cached  ·  {total_ms / 1000:.0f}s")
 
     # ---- Company / sheet selection ----
 
@@ -1004,10 +1015,7 @@ class MainWindow(QMainWindow):
             model, merged_cells, group_rows_0, group_cols_0 = cached_entry
             self._apply_model_to_table(model, merged_cells, group_rows_0, group_cols_0, cache_key)
             group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
-            self._status.setText(
-                f"{model.rowCount():,} rows × {model.columnCount()} cols"
-                f"{group_note}"
-            )
+            self._status.setText(f"{model.rowCount():,} rows × {model.columnCount()} cols{group_note}")
             return
 
         # Try Arrow path: <parent>/<stem>.<safe_sheet_name>.arrow (mmap, pre-formatted)
@@ -1024,10 +1032,7 @@ class MainWindow(QMainWindow):
             )
             self._apply_model_to_table(arrow_model, merged_cells, group_rows_0, group_cols_0, cache_key)
             group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
-            self._status.setText(
-                f"{arrow_model.rowCount():,} rows × {arrow_model.columnCount()} cols"
-                f"{group_note}"
-            )
+            self._status.setText(f"{arrow_model.rowCount():,} rows × {arrow_model.columnCount()} cols{group_note}")
             return
 
         # Fallback: calamine / preload-cache path.
@@ -1045,16 +1050,15 @@ class MainWindow(QMainWindow):
 
         sc = self._sidecar_for(name)
         row_fmt = {int(k): v for k, v in sc.get("row_formats", {}).items()}
-        cell_fmt = {
-            tuple(int(p) for p in k.split(",")): v
-            for k, v in sc.get("cell_formats", {}).items()
-        }
+        cell_fmt = {tuple(int(p) for p in k.split(",")): v for k, v in sc.get("cell_formats", {}).items()}
         hidden_rows = set(sc.get("hidden_rows", []))
         hidden_cols = set(sc.get("hidden_cols", []))
         merged_cells = sc.get("merged_cells", [])
         if not merged_cells:
-            merged_cells = [f"{_col_letter(c1)}{r1 + 1}:{_col_letter(c2)}{r2 + 1}"
-                            for (r1, c1), (r2, c2) in self._current_wb.sheets[name].merged_cells]
+            merged_cells = [
+                f"{_col_letter(c1)}{r1 + 1}:{_col_letter(c2)}{r2 + 1}"
+                for (r1, c1), (r2, c2) in self._current_wb.sheets[name].merged_cells
+            ]
         row_outlines = {int(k): v for k, v in sc.get("row_outlines", {}).items()}
         col_outlines = {int(k): v for k, v in sc.get("col_outlines", {}).items()}
         group_rows_0 = {r - 1 for r in row_outlines}
@@ -1077,10 +1081,7 @@ class MainWindow(QMainWindow):
 
         self._apply_model_to_table(model, merged_cells, group_rows_0, group_cols_0, cache_key)
         group_note = f"   ·   {len(group_rows_0)} grouped rows" if group_rows_0 else ""
-        self._status.setText(
-            f"{model.rowCount():,} rows × {model.columnCount()} cols"
-            f"{group_note}"
-        )
+        self._status.setText(f"{model.rowCount():,} rows × {model.columnCount()} cols{group_note}")
 
     _CHAR_PX = 7  # approx px per character at 12-13px Segoe UI
     _OVERFLOW_TEXT_MIN_CHARS = 24
@@ -1179,9 +1180,11 @@ class MainWindow(QMainWindow):
         if not arrow_path.exists():
             return None
         try:
-            import pyarrow as pa
+            # Plain workbooks do not need the Arrow runtime.
+            import pyarrow as pa  # noqa: PLC0415
+
             if ArrowSheetModel is None:
-                from theia.arrow_model import ArrowSheetModel
+                from theia.arrow_model import ArrowSheetModel  # noqa: PLC0415
             mmap = pa.memory_map(str(arrow_path), "r")
             reader = pa.ipc.open_file(mmap)
             batch = reader.get_batch(0)

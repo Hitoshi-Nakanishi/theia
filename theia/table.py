@@ -1,12 +1,19 @@
-"""Table view widgets: SheetTableView (Excel Ctrl+Arrow nav) and FrozenPaneTable
-(four sub-views sharing a model, Excel-style freeze panes)."""
+"""Spreadsheet navigation and rendering across four views with shared freeze panes."""
 
 import re
 
-from PySide6.QtCore import QItemSelection, QItemSelectionModel, QRect, Qt
+from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, Qt
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QFrame, QGridLayout, QHeaderView, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QTableView, QWidget
-
+from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHeaderView,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTableView,
+    QWidget,
+)
 
 _RANGE_RE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")
 
@@ -15,7 +22,7 @@ _RANGE_RE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")
 # ---------------------------------------------------------------------------
 
 _NORMAL_FONT: QFont | None = None
-_HIDDEN_FG_COLOR = QColor("#6e7681")      # matches model._HIDDEN_FG brush color
+_HIDDEN_FG_COLOR = QColor("#6e7681")  # matches model._HIDDEN_FG brush color
 
 # Populated on first delegate paint call to avoid importing model at module
 # load time (model.py creates Qt objects at import, needs QApp).
@@ -30,7 +37,9 @@ def _init_cell_style_consts():
     global _CELL_HIDDEN_BG, _CELL_NUM_COLOR_NEG, _CELL_ALIGN_RIGHT, _CELL_ALIGN_LEFT, _CELL_HIDDEN_FONT
     if _CELL_HIDDEN_BG is not None:
         return
-    from theia.model import _HIDDEN_BG, _NUM_COLOR_NEG, _ALIGN_RIGHT, _ALIGN_LEFT, _hidden_font
+    # These shared Qt objects require an initialized QApplication.
+    from theia.model import _ALIGN_LEFT, _ALIGN_RIGHT, _HIDDEN_BG, _NUM_COLOR_NEG, _hidden_font  # noqa: PLC0415
+
     _CELL_HIDDEN_BG = _HIDDEN_BG
     _CELL_NUM_COLOR_NEG = _NUM_COLOR_NEG
     _CELL_ALIGN_RIGHT = _ALIGN_RIGHT
@@ -54,9 +63,9 @@ class _FastCellDelegate(QStyledItemDelegate):
     Falls back to QStyledItemDelegate for SheetModel or any other model type.
     """
 
-    _SEL   = QStyle.StateFlag.State_Selected
-    _ALT   = QStyleOptionViewItem.ViewItemFeature.Alternate
-    _ready = False   # set to True after first paint warms up the constants
+    _SEL = QStyle.StateFlag.State_Selected
+    _ALT = QStyleOptionViewItem.ViewItemFeature.Alternate
+    _ready = False  # set to True after first paint warms up the constants
     _OVERFLOW_TEXT_MIN_CHARS = 24
     _OVERFLOW_MAX_COLS = 6
 
@@ -263,84 +272,17 @@ def _parse_excel_range(rng: str) -> tuple[int, int, int, int] | None:
     return row_a, col_a, row_b - row_a + 1, col_b - col_a + 1
 
 
-class SheetTableView(QTableView):
-    """QTableView with Excel-style Ctrl+Arrow / Ctrl+Shift+Arrow navigation."""
-
-    _ARROW_DIRS = {
-        Qt.Key_Right: (0, 1),
-        Qt.Key_Left: (0, -1),
-        Qt.Key_Down: (1, 0),
-        Qt.Key_Up: (-1, 0),
-    }
-
-    def keyPressEvent(self, event):
-        mods = event.modifiers()
-        if mods & Qt.ControlModifier and event.key() in self._ARROW_DIRS:
-            dr, dc = self._ARROW_DIRS[event.key()]
-            self._excel_jump(dr, dc, extend=bool(mods & Qt.ShiftModifier))
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def _excel_jump(self, dr: int, dc: int, *, extend: bool):
-        model = self.model()
-        if model is None:
-            return
-        rows, cols = model.rowCount(), model.columnCount()
-        cur = self.currentIndex()
-        if not cur.isValid():
-            return
-        r, c = cur.row(), cur.column()
-
-        def is_empty(rr: int, cc: int) -> bool:
-            if hasattr(model, "raw_value"):
-                v = model.raw_value(rr, cc)
-            else:
-                v = model.data(model.index(rr, cc), Qt.DisplayRole)
-            return v is None or v == ""
-
-        nr, nc = r + dr, c + dc
-        if not (0 <= nr < rows and 0 <= nc < cols):
-            return
-
-        if is_empty(r, c) or is_empty(nr, nc):
-            while 0 <= nr < rows and 0 <= nc < cols and is_empty(nr, nc):
-                nr += dr
-                nc += dc
-            if not (0 <= nr < rows and 0 <= nc < cols):
-                nr = max(0, min(rows - 1, nr - dr))
-                nc = max(0, min(cols - 1, nc - dc))
-        else:
-            while (
-                0 <= nr + dr < rows
-                and 0 <= nc + dc < cols
-                and not is_empty(nr + dr, nc + dc)
-            ):
-                nr += dr
-                nc += dc
-
-        new = model.index(nr, nc)
-        if extend:
-            top, left = min(r, nr), min(c, nc)
-            bottom, right = max(r, nr), max(c, nc)
-            sel = QItemSelection(model.index(top, left), model.index(bottom, right))
-            self.selectionModel().select(sel, QItemSelectionModel.ClearAndSelect)
-            self.selectionModel().setCurrentIndex(new, QItemSelectionModel.NoUpdate)
-        else:
-            self.setCurrentIndex(new)
-
-
 class FrozenPaneTable(QWidget):
     """Four QTableViews sharing a single model with Excel-style freeze panes.
 
-      +----+--------+
-      | TL |   TR   |   <- frozen rows
-      +----+--------+
-      |    |        |
-      | BL |   BR   |   <- BR owns the scrollbars
-      |    |        |
-      +----+--------+
-         ^ frozen cols
+    +----+--------+
+    | TL |   TR   |   <- frozen rows
+    +----+--------+
+    |    |        |
+    | BL |   BR   |   <- BR owns the scrollbars
+    |    |        |
+    +----+--------+
+       ^ frozen cols
     """
 
     def __init__(self, parent=None):
@@ -354,6 +296,9 @@ class FrozenPaneTable(QWidget):
         # Excel range strings ("B1:D3") to apply via setSpan on whichever
         # sub-view contains the range. Set by setMergedCells.
         self._merged_cells: list[str] = []
+        self._merged_ranges: list[tuple[int, int, int, int]] = []
+        self._selection_anchor = None
+        self._navigation_current = None
         # Excel outline group state: 0-based row/col indices that are hidden
         # when groups are collapsed. Managed by setGroups() / toggleGroups().
         self._group_rows: set = set()
@@ -369,13 +314,17 @@ class FrozenPaneTable(QWidget):
         self._prev_freeze_cols = -1
         self._prev_had_groups = False
 
-        self.br = SheetTableView()
-        self.bl = SheetTableView()
-        self.tr = SheetTableView()
-        self.tl = SheetTableView()
+        self.br = QTableView()
+        self.bl = QTableView()
+        self.tr = QTableView()
+        self.tl = QTableView()
+        self.setFocusProxy(self.br)
 
         delegate = _FastCellDelegate(self)
         for v in self._views():
+            v.installEventFilter(self)
+            v.viewport().installEventFilter(self)
+            v.setEditTriggers(QTableView.NoEditTriggers)
             v.setAlternatingRowColors(True)
             v.setShowGrid(True)
             v.setSelectionMode(QTableView.ExtendedSelection)
@@ -420,6 +369,7 @@ class FrozenPaneTable(QWidget):
                     b.resizeSection(idx, new)
                 finally:
                     self._syncing_section = False
+
             def b_to_a(idx, _old, new):
                 if self._syncing_section:
                     return
@@ -428,6 +378,7 @@ class FrozenPaneTable(QWidget):
                     a.resizeSection(idx, new)
                 finally:
                     self._syncing_section = False
+
             a.sectionResized.connect(a_to_b)
             b.sectionResized.connect(b_to_a)
             # Re-fit the frozen pane widget when a frozen column or row changes.
@@ -458,12 +409,114 @@ class FrozenPaneTable(QWidget):
     def _views(self):
         return (self.tl, self.tr, self.bl, self.br)
 
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.MouseButtonPress:
+            self._selection_anchor = None
+            self._navigation_current = None
+        elif event.type() == QEvent.KeyPress and self._model is not None:
+            directions = {
+                Qt.Key_Right: (0, 1),
+                Qt.Key_Left: (0, -1),
+                Qt.Key_Down: (1, 0),
+                Qt.Key_Up: (-1, 0),
+                Qt.Key_Tab: (0, 1),
+                Qt.Key_Backtab: (0, -1),
+                Qt.Key_Return: (1, 0),
+                Qt.Key_Enter: (1, 0),
+            }
+            key, modifiers = event.key(), event.modifiers()
+            if key not in directions or modifiers & Qt.AltModifier:
+                return super().eventFilter(watched, event)
+            current = self.currentIndex()
+            if not current.isValid():
+                return super().eventFilter(watched, event)
+            dr, dc = directions[key]
+            arrow = key in (Qt.Key_Right, Qt.Key_Left, Qt.Key_Down, Qt.Key_Up)
+            if not arrow and modifiers & (Qt.ControlModifier | Qt.MetaModifier):
+                return super().eventFilter(watched, event)
+            shift = bool(modifiers & Qt.ShiftModifier)
+            if shift and key in (Qt.Key_Tab, Qt.Key_Return, Qt.Key_Enter):
+                dr, dc = -dr, -dc
+            cell = current.row(), current.column()
+            target = self._next_cell(*cell, dr, dc)
+            if arrow and modifiers & (Qt.ControlModifier | Qt.MetaModifier):
+                target = self._excel_jump(cell, target, dr, dc)
+            self.setCurrentIndex(self._model.index(*target), extend=arrow and shift)
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _next_cell(self, row, column, dr, dc):
+        start = row, column
+        for top, left, height, width in self._merged_ranges:
+            if top <= row < top + height and left <= column < left + width:
+                row = top + height - 1 if dr > 0 else row
+                column = left + width - 1 if dc > 0 else column
+                break
+        row, column = row + dr, column + dc
+        while 0 <= row < self._model.rowCount() and 0 <= column < self._model.columnCount():
+            if self._groups_collapsed and (row in self._group_rows or column in self._group_cols):
+                row, column = row + dr, column + dc
+                continue
+            for top, left, height, width in self._merged_ranges:
+                if top <= row < top + height and left <= column < left + width:
+                    return top, left
+            return row, column
+        return start
+
+    def _excel_jump(self, current, target, dr, dc):
+        def is_empty(cell):
+            value = self._model.raw_value(*cell)
+            return value is None or value == ""
+
+        find_data = is_empty(current) or is_empty(target)
+        while target != current:
+            if find_data and not is_empty(target):
+                break
+            following = self._next_cell(*target, dr, dc)
+            if following == target or (not find_data and is_empty(following)):
+                break
+            current, target = target, following
+        return target
+
+    def setCurrentIndex(self, index, *, extend=False):
+        """Select and reveal a cell, keeping keyboard focus in its visible pane."""
+        if index is None or not index.isValid() or index.model() is not self._model:
+            return
+        current = self.currentIndex()
+        cell = current.row(), current.column()
+        if not extend or self._selection_anchor is None or self._navigation_current != cell:
+            self._selection_anchor = cell if extend else (index.row(), index.column())
+        selection = self.br.selectionModel()
+        if extend:
+            row, column = self._selection_anchor
+            area = QItemSelection(
+                self._model.index(min(row, index.row()), min(column, index.column())),
+                self._model.index(max(row, index.row()), max(column, index.column())),
+            )
+            selection.select(area, QItemSelectionModel.ClearAndSelect)
+            selection.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+        else:
+            selection.setCurrentIndex(index, QItemSelectionModel.ClearAndSelect)
+        self._navigation_current = index.row(), index.column()
+        view = self._view_for_range(index.row(), index.column(), 1, 1, self._freeze_rows, self._freeze_cols)
+        view.scrollTo(index)
+        if index.row() >= self._freeze_rows:
+            self.br.verticalScrollBar().setValue(view.verticalScrollBar().value())
+        if index.column() >= self._freeze_cols:
+            self.br.horizontalScrollBar().setValue(view.horizontalScrollBar().value())
+        self.setFocusProxy(view)
+        view.setFocus(Qt.OtherFocusReason)
+
     # ---- model & freeze API ----
 
     def setModel(self, model):
         self._model = model
         self._col_widths = []
         self._merged_cells = []
+        self._merged_ranges = []
+        self._selection_anchor = None
+        self._navigation_current = None
         # Reset delta state so the next _apply_freeze does a full pass.
         self._prev_model_rows = 0
         self._prev_model_cols = 0
@@ -486,8 +539,9 @@ class FrozenPaneTable(QWidget):
                 v.setVisible(False)
             self.br.setVisible(True)
         # Qt retains replaced selection models, including header models.
-        active = {owner.selectionModel() for view in self._views()
-                  for owner in (view, view.horizontalHeader(), view.verticalHeader())}
+        active = {
+            owner.selectionModel() for view in self._views() for owner in (view, view.horizontalHeader(), view.verticalHeader())
+        }
         for selection in self.findChildren(QItemSelectionModel):
             if selection not in active:
                 selection.deleteLater()
@@ -516,6 +570,7 @@ class FrozenPaneTable(QWidget):
 
     def setMergedCells(self, ranges: list[str]):
         self._merged_cells = list(ranges)
+        self._merged_ranges = [area for text in ranges if (area := _parse_excel_range(text)) is not None]
         self._apply_merges()
 
     def freezeRows(self) -> int:
@@ -586,14 +641,10 @@ class FrozenPaneTable(QWidget):
 
         has_groups = bool(self._group_rows or self._group_cols)
         freeze_unchanged = (
-            fr == self._prev_freeze_rows and fc == self._prev_freeze_cols
-            and not has_groups and not self._prev_had_groups
+            fr == self._prev_freeze_rows and fc == self._prev_freeze_cols and not has_groups and not self._prev_had_groups
         )
 
-        all_headers = (
-            [v.verticalHeader()   for v in self._views()] +
-            [v.horizontalHeader() for v in self._views()]
-        )
+        all_headers = [v.verticalHeader() for v in self._views()] + [v.horizontalHeader() for v in self._views()]
 
         if freeze_unchanged:
             # DELTA MODE — only touch rows/cols that differ from the previous
@@ -613,8 +664,8 @@ class FrozenPaneTable(QWidget):
                     in_top = r < fr
                     self.tl.setRowHidden(r, not in_top)
                     self.tr.setRowHidden(r, not in_top)
-                    self.bl.setRowHidden(r,     in_top)
-                    self.br.setRowHidden(r,     in_top)
+                    self.bl.setRowHidden(r, in_top)
+                    self.br.setRowHidden(r, in_top)
 
                 # Rows removed since last call — hide in all views so Qt does
                 # not try to paint stale sections.
@@ -627,8 +678,8 @@ class FrozenPaneTable(QWidget):
                     in_left = c < fc
                     self.tl.setColumnHidden(c, not in_left)
                     self.bl.setColumnHidden(c, not in_left)
-                    self.tr.setColumnHidden(c,     in_left)
-                    self.br.setColumnHidden(c,     in_left)
+                    self.tr.setColumnHidden(c, in_left)
+                    self.br.setColumnHidden(c, in_left)
 
                 # Cols removed since last call.
                 for c in range(cols, prev_cols):
@@ -672,14 +723,14 @@ class FrozenPaneTable(QWidget):
                     in_top = r < fr
                     self.tl.setRowHidden(r, not in_top)
                     self.tr.setRowHidden(r, not in_top)
-                    self.bl.setRowHidden(r,     in_top)
-                    self.br.setRowHidden(r,     in_top)
+                    self.bl.setRowHidden(r, in_top)
+                    self.br.setRowHidden(r, in_top)
                 for c in range(cols):
                     in_left = c < fc
                     self.tl.setColumnHidden(c, not in_left)
                     self.bl.setColumnHidden(c, not in_left)
-                    self.tr.setColumnHidden(c,     in_left)
-                    self.br.setColumnHidden(c,     in_left)
+                    self.tr.setColumnHidden(c, in_left)
+                    self.br.setColumnHidden(c, in_left)
 
                 self._apply_groups()
 
