@@ -21,9 +21,9 @@ def _col_letter(n: int) -> str:
     return s
 
 
-_PCT_RE = re.compile(r"0(?:\.(0+))?%")
-_THOUSANDS_RE = re.compile(r"#,##0(?:\.(0+))?")
-_DECIMAL_RE = re.compile(r"^0(?:\.(0+))?$")
+_NUMBER_RE = re.compile(
+    r"(?P<sign>-?)(?P<open>\()?(?P<number>#,##0|0)(?:\.(?P<decimals>0+))?(?P<percent>%)?(?P<close>\))?"
+)
 
 
 def apply_excel_format(value, fmt: str | None) -> str | None:
@@ -40,26 +40,32 @@ def apply_excel_format(value, fmt: str | None) -> str | None:
         return None
     if isinstance(value, float) and value != value:  # NaN
         return ""
+    if re.search(r"\[[<>=]", fmt):
+        return None
 
-    # Pick the positive-value section (Excel allows e.g. "0.0%;(0.0%);-")
-    section = fmt.split(";")[0]
-
-    m = _PCT_RE.search(section)
-    if m:
-        decimals = len(m.group(1)) if m.group(1) else 0
-        return f"{value * 100:,.{decimals}f}%"
-
-    m = _THOUSANDS_RE.search(section)
-    if m:
-        decimals = len(m.group(1)) if m.group(1) else 0
-        return f"{value:,.{decimals}f}"
-
-    m = _DECIMAL_RE.match(section)
-    if m:
-        decimals = len(m.group(1)) if m.group(1) else 0
-        return f"{value:.{decimals}f}"
-
-    return None
+    sections = [""]
+    for token in re.findall(r'"[^"]*"|\\.|[^"\\;]+|;', fmt):
+        if token == ";":
+            sections.append("")
+        else:
+            sections[-1] += token
+    index = 2 if value == 0 and len(sections) >= 3 else 1 if value < 0 and len(sections) >= 2 else 0
+    section = re.sub(r"\[(?:Black|Blue|Cyan|Green|Magenta|Red|White|Yellow|Color\d+)\]", "", sections[index], flags=re.I)
+    if not section:
+        return ""
+    if section == "-":
+        return section
+    if re.fullmatch(r'"[^"]*"', section):
+        return section[1:-1]
+    match = _NUMBER_RE.fullmatch(section)
+    if match is None or bool(match["open"]) != bool(match["close"]):
+        return None
+    number = abs(value) if index == 1 else value
+    if match["percent"]:
+        number *= 100
+    decimals = len(match["decimals"] or "")
+    shown = f"{number:,.{decimals}f}" if match["number"].startswith("#") or match["percent"] else f"{number:.{decimals}f}"
+    return f"{match['sign']}{match['open'] or ''}{shown}{match['percent'] or ''}{match['close'] or ''}"
 
 
 def _format_cell(value) -> str:
