@@ -2,7 +2,7 @@
 
 import re
 
-from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, Qt
+from PySide6.QtCore import QEvent, QItemSelection, QItemSelectionModel, QRect, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QFrame,
@@ -21,7 +21,6 @@ _RANGE_RE = re.compile(r"^([A-Z]+)(\d+):([A-Z]+)(\d+)$")
 # Fast-delegate style constants — all lazy (need QApplication to exist).
 # ---------------------------------------------------------------------------
 
-_NORMAL_FONT: QFont | None = None
 _HIDDEN_FG_COLOR = QColor("#6e7681")  # matches model._HIDDEN_FG brush color
 
 # Populated on first delegate paint call to avoid importing model at module
@@ -30,28 +29,19 @@ _CELL_HIDDEN_BG = None
 _CELL_NUM_COLOR_NEG = None
 _CELL_ALIGN_RIGHT = None
 _CELL_ALIGN_LEFT = None
-_CELL_HIDDEN_FONT = None
 
 
 def _init_cell_style_consts():
-    global _CELL_HIDDEN_BG, _CELL_NUM_COLOR_NEG, _CELL_ALIGN_RIGHT, _CELL_ALIGN_LEFT, _CELL_HIDDEN_FONT
+    global _CELL_HIDDEN_BG, _CELL_NUM_COLOR_NEG, _CELL_ALIGN_RIGHT, _CELL_ALIGN_LEFT
     if _CELL_HIDDEN_BG is not None:
         return
     # These shared Qt objects require an initialized QApplication.
-    from theia.model import _ALIGN_LEFT, _ALIGN_RIGHT, _HIDDEN_BG, _NUM_COLOR_NEG, _hidden_font  # noqa: PLC0415
+    from theia.model import _ALIGN_LEFT, _ALIGN_RIGHT, _HIDDEN_BG, _NUM_COLOR_NEG  # noqa: PLC0415
 
     _CELL_HIDDEN_BG = _HIDDEN_BG
     _CELL_NUM_COLOR_NEG = _NUM_COLOR_NEG
     _CELL_ALIGN_RIGHT = _ALIGN_RIGHT
     _CELL_ALIGN_LEFT = _ALIGN_LEFT
-    _CELL_HIDDEN_FONT = _hidden_font
-
-
-def _normal_font() -> QFont:
-    global _NORMAL_FONT
-    if _NORMAL_FONT is None:
-        _NORMAL_FONT = QFont()
-    return _NORMAL_FONT
 
 
 class _FastCellDelegate(QStyledItemDelegate):
@@ -108,7 +98,10 @@ class _FastCellDelegate(QStyledItemDelegate):
             return
 
         # ---- Font ----
-        painter.setFont(_CELL_HIDDEN_FONT() if is_hidden else _normal_font())
+        font = QFont(option.font)
+        if is_hidden:
+            font.setItalic(True)
+        painter.setFont(font)
 
         # ---- Text color ----
         if selected:
@@ -201,7 +194,7 @@ class _FastCellDelegate(QStyledItemDelegate):
             return
         painter.save()
         painter.setClipRect(option.rect)
-        painter.setFont(_normal_font())
+        painter.setFont(option.font)
         if selected:
             painter.setPen(option.palette.highlightedText().color())
         else:
@@ -290,9 +283,10 @@ class FrozenPaneTable(QWidget):
         self._freeze_rows = 0
         self._freeze_cols = 0
         self._model = None
+        self._zoom = 100
         # Source of truth for column widths — querying a view's columnWidth()
         # returns 0 for hidden columns, which breaks frozen-pane sizing.
-        self._col_widths: list[int] = []
+        self._col_widths: list[float] = []
         # Excel range strings ("B1:D3") to apply via setSpan on whichever
         # sub-view contains the range. Set by setMergedCells.
         self._merged_cells: list[str] = []
@@ -381,6 +375,9 @@ class FrozenPaneTable(QWidget):
 
             a.sectionResized.connect(a_to_b)
             b.sectionResized.connect(b_to_a)
+            if a.orientation() == Qt.Horizontal:
+                a.sectionResized.connect(self._record_column_width)
+                b.sectionResized.connect(self._record_column_width)
             # Re-fit the frozen pane widget when a frozen column or row changes.
             a.sectionResized.connect(lambda *_: self._size_frozen_panes())
             b.sectionResized.connect(lambda *_: self._size_frozen_panes())
@@ -584,12 +581,24 @@ class FrozenPaneTable(QWidget):
 
     # ---- column sizing (called by MainWindow's _autosize_columns) ----
 
+    def setZoom(self, percent: int):
+        self._zoom = percent
+        for view in self._views():
+            view.verticalHeader().setMinimumSectionSize(max(1, round(12 * percent / 100)))
+            view.verticalHeader().setDefaultSectionSize(round(22 * percent / 100))
+        self.setColumnWidths(self._col_widths)
+
+    def _record_column_width(self, column, previous, width):
+        if not self._syncing_section and column < len(self._col_widths):
+            self._col_widths[column] = width * 100 / self._zoom
+
     def setColumnWidth(self, col: int, width: int):
         while len(self._col_widths) <= col:
             self._col_widths.append(0)
         self._col_widths[col] = width
         for v in self._views():
-            v.horizontalHeader().resizeSection(col, width)
+            with QSignalBlocker(v.horizontalHeader()):
+                v.horizontalHeader().resizeSection(col, max(1, round(width * self._zoom / 100)))
         self._size_frozen_panes()
 
     def setColumnWidths(self, widths: list):
@@ -602,7 +611,7 @@ class FrozenPaneTable(QWidget):
         try:
             for i, w in enumerate(widths):
                 for h in all_h:
-                    h.resizeSection(i, w)
+                    h.resizeSection(i, max(1, round(w * self._zoom / 100)))
         finally:
             for h in all_h:
                 h.blockSignals(False)
@@ -610,7 +619,7 @@ class FrozenPaneTable(QWidget):
 
     def columnWidth(self, col: int) -> int:
         if col < len(self._col_widths) and self._col_widths[col] > 0:
-            return self._col_widths[col]
+            return max(1, round(self._col_widths[col] * self._zoom / 100))
         return self.br.horizontalHeader().sectionSize(col) or self.br.horizontalHeader().defaultSectionSize()
 
     def resizeColumnToContents(self, col: int):
@@ -620,7 +629,7 @@ class FrozenPaneTable(QWidget):
         if w > 0:
             while len(self._col_widths) <= col:
                 self._col_widths.append(0)
-            self._col_widths[col] = w
+            self._col_widths[col] = w * 100 / self._zoom
 
     def horizontalHeader(self):
         # Exposed so external callers see the BR header (the "main" one).

@@ -146,8 +146,14 @@ There is no required source or filename convention. Workbooks can be `.xlsx`, `.
 
 ## Keyboard Shortcuts
 
+The bottom-right zoom slider and − / + buttons resize the entire interface from 50% to 200%, including the models list, menus,
+sheet tabs and cells. Click the percentage to return to 100%. The chosen zoom is remembered across launches.
+
 | Shortcut | Action |
 |---|---|
+| `Ctrl/Cmd+mouse wheel` | Zoom the entire interface |
+| `Ctrl/Cmd++` / `Ctrl/Cmd+-` | Zoom in / out |
+| `Ctrl/Cmd+0` | Reset zoom to 100% |
 | `Arrow` | Move one cell, including across frozen panes |
 | `Shift+Arrow` | Extend or shrink the selection from its starting cell |
 | `Enter` / `Shift+Enter` | Move down / up |

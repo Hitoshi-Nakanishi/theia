@@ -6,6 +6,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from PySide6.QtCore import (
+    QEvent,
     QItemSelectionModel,
     QSettings,
     QSignalBlocker,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSlider,
     QSplitter,
     QStackedWidget,
     QTabBar,
@@ -279,6 +281,8 @@ class MainWindow(QMainWindow):
         self._theme_key = _setting_theme(self._settings)
         self._dark_mode = _setting_bool(self._settings, "theme/dark", False)
         self._sidebar_visible = _setting_bool(self._settings, "view/sidebar", True)
+        self._zoom_percent = 100
+        self._zoom_wheel_delta = 0
         self._theme_combo: QComboBox | None = None
         self._dark_toggle: QCheckBox | None = None
         self._theme_actions: dict[str, QAction] = {}
@@ -522,6 +526,17 @@ class MainWindow(QMainWindow):
         view_menu.addAction(unfreeze)
         view_menu.addSeparator()
         view_menu.addAction(self._toggle_groups_act)
+        self._zoom_in_action = QAction("Zoom &in", self)
+        self._zoom_in_action.setShortcuts(QKeySequence.keyBindings(QKeySequence.ZoomIn) + [QKeySequence("Ctrl+=")])
+        self._zoom_in_action.triggered.connect(lambda: self._set_zoom(self._zoom_percent + 10))
+        self._zoom_out_action = QAction("Zoom &out", self)
+        self._zoom_out_action.setShortcut(QKeySequence.ZoomOut)
+        self._zoom_out_action.triggered.connect(lambda: self._set_zoom(self._zoom_percent - 10))
+        self._zoom_reset_action = QAction("Reset zoom to &100%", self)
+        self._zoom_reset_action.setShortcut("Ctrl+0")
+        self._zoom_reset_action.triggered.connect(lambda: self._set_zoom(100))
+        view_menu.addSeparator()
+        view_menu.addActions([self._zoom_in_action, self._zoom_out_action, self._zoom_reset_action])
 
         compare_menu = menu_bar.addMenu("&Compare")
         compare_menu.addAction(self._compare_action)
@@ -572,13 +587,86 @@ class MainWindow(QMainWindow):
         bar_layout.addWidget(theme_button)
         self.setMenuWidget(bar)
 
+        zoom_controls = QWidget()
+        zoom_controls.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        zoom_layout = QHBoxLayout(zoom_controls)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(4)
+        self._zoom_label = QToolButton()
+        self._zoom_label.setAccessibleName("Reset zoom to 100%")
+        self._zoom_label.setToolTip("Reset zoom to 100%")
+        self._zoom_label.setFocusPolicy(Qt.NoFocus)
+        self._zoom_label.clicked.connect(lambda: self._set_zoom(100))
+        zoom_layout.addWidget(self._zoom_label)
+        for label, action in (("−", self._zoom_out_action), ("+", self._zoom_in_action)):
+            button = QToolButton()
+            button.setObjectName("zoom-out" if label == "−" else "zoom-in")
+            button.clicked.connect(action.trigger)
+            action.changed.connect(lambda action=action, button=button: button.setEnabled(action.isEnabled()))
+            button.setText(label)
+            button.setAccessibleName(action.text().replace("&", ""))
+            button.setToolTip(action.text().replace("&", ""))
+            button.setFocusPolicy(Qt.NoFocus)
+            zoom_layout.addWidget(button)
+            if label == "−":
+                self._zoom_slider = QSlider(Qt.Horizontal)
+                self._zoom_slider.setRange(50, 200)
+                self._zoom_slider.setSingleStep(10)
+                self._zoom_slider.setPageStep(10)
+                self._zoom_slider.setFixedWidth(140)
+                self._zoom_slider.setAccessibleName("Zoom")
+                self._zoom_slider.setToolTip("Zoom the entire interface (50–200%) · Ctrl/⌘ + mouse wheel")
+                self._zoom_slider.valueChanged.connect(self._set_zoom)
+                zoom_layout.addWidget(self._zoom_slider)
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().addPermanentWidget(zoom_controls)
+
         # ---- Drag & drop ----
         self.setAcceptDrops(True)
         self._sync_theme_controls()
         self._set_sidebar_visible(self._sidebar_visible, persist=False)
-        self._apply_theme()
+        self._set_zoom(self._settings.value("view/zoom", 100))
+        QApplication.instance().installEventFilter(self)
 
     # ---- Theme / view controls ----
+
+    def eventFilter(self, watched, event):
+        if (
+            event.type() == QEvent.Wheel
+            and isinstance(watched, QWidget)
+            and (watched is self or self.isAncestorOf(watched))
+            and event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier)
+        ):
+            self._zoom_wheel_delta += event.angleDelta().y() or event.pixelDelta().y() * 6
+            steps = int(self._zoom_wheel_delta / 120)
+            self._zoom_wheel_delta -= steps * 120
+            if steps:
+                self._set_zoom(self._zoom_percent + steps * 10)
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _set_zoom(self, percent):
+        try:
+            percent = max(50, min(200, int(percent)))
+        except TypeError:
+            percent = 100
+        except ValueError:
+            percent = 100
+        self._zoom_percent = percent
+        with QSignalBlocker(self._zoom_slider):
+            self._zoom_slider.setValue(percent)
+        self._zoom_label.setText(f"{percent}%")
+        self._zoom_in_action.setEnabled(percent < 200)
+        self._zoom_out_action.setEnabled(percent > 50)
+        self._settings.setValue("view/zoom", percent)
+        self._apply_theme()
+        self._cell_address.setFixedWidth(round(72 * percent / 100))
+        self.sheet_filter.setMaximumWidth(round(180 * percent / 100))
+        self.company_tree.setIndentation(round(14 * percent / 100))
+        self.table.setZoom(percent)
+        for dialog in self._comparison_dialogs:
+            dialog.table.verticalHeader().setDefaultSectionSize(round(24 * percent / 100))
 
     def _build_empty_state(self) -> QWidget:
         """The start panel: how to open models and where the default model folder is."""
@@ -733,7 +821,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.setPalette(build_palette(self._theme_key, self._dark_mode))
-            app.setStyleSheet(build_stylesheet(self._theme_key, self._dark_mode))
+            app.setStyleSheet(build_stylesheet(self._theme_key, self._dark_mode, self._zoom_percent))
 
     # ---- Public open API ----
 
@@ -858,7 +946,7 @@ class MainWindow(QMainWindow):
             by_collection.setdefault(collection, {}).setdefault(group, []).append((label, source))
 
         root = self._companies_model.invisibleRootItem()
-        folder_font = QFont(self.company_tree.font())
+        folder_font = QFont()
         folder_font.setWeight(QFont.DemiBold)
         for collection in sorted(by_collection):
             groups = by_collection[collection]
@@ -1304,6 +1392,7 @@ class MainWindow(QMainWindow):
 
         collect(self._companies_proxy.index(-1, -1))
         dialog = ComparisonDialog(sources, self._current_source, sheet, metrics, self, match_labels=match_labels)
+        dialog.table.verticalHeader().setDefaultSectionSize(round(24 * self._zoom_percent / 100))
         dialog.open_source.connect(self._open_comparison_source)
         self._comparison_dialogs.append(dialog)
         dialog.destroyed.connect(lambda: self._comparison_dialogs.remove(dialog))
@@ -1331,6 +1420,7 @@ class MainWindow(QMainWindow):
         self._status.setText("This file is no longer in the current folder or file list")
 
     def closeEvent(self, event):
+        QApplication.instance().removeEventFilter(self)
         for dialog in self._comparison_dialogs:
             if dialog.worker is not None:
                 dialog.worker.cancel()
