@@ -1,8 +1,10 @@
 # Publication checks
 
-The owner must select a distribution license and resolve every privacy finding before publication. No license grant is
-implied by this checklist. Review the Qt and other dependency licenses separately before distributing a packaged application.
+Theia source is under the [MIT License](LICENSE). Resolve every privacy finding before publication and retain the
+[third-party notices](THIRD_PARTY_NOTICES.md). Review the Qt and other dependency licenses separately before distributing a
+packaged application containing those libraries.
 
+The following is the maintainer's privacy gate; users and contributors do not need the private policy to install or test Theia.
 Argus runs locally from a separate guard checkout with the owner's private policy. Keep that policy outside this repository.
 With that environment activated, run from its root:
 

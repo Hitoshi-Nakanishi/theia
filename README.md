@@ -14,6 +14,16 @@ read directly from `.xlsx` and `.xlsm` workbooks. Optional display metadata can 
 
 ## Quick Start
 
+With Python 3.11 or newer, activate a virtual environment and install from this checkout:
+
+```sh
+python -m pip install .
+python -m theia examples/demo_models/0000.T_Demo_Model.xlsx
+```
+
+The default install contains the Qt Essentials modules used by the viewer. Pre-formatted Arrow sidecars are optional; install
+them with `python -m pip install ".[arrow]"`. Ordinary Excel files work without Arrow. Task is optional.
+
 With [Task](https://taskfile.dev/) and Python 3.11+ installed, one command starts the viewer:
 
 ```sh
@@ -228,6 +238,14 @@ Theia is designed so a public checkout carries no proprietary information:
 - It reads only local files and uploads nothing.
 - Collection and folder labels come from local directory names.
 - `.env` and build artifacts are gitignored.
+
+## License and contributions
+
+Theia source is released under the [MIT License](LICENSE). Qt and the other dependencies retain their own licenses; see
+[third-party notices](THIRD_PARTY_NOTICES.md) before redistributing a package containing those libraries. This project builds
+a Python wheel rather than a frozen application containing Qt.
+
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for development and [SECURITY.md](SECURITY.md) for confidential vulnerability reporting.
 
 ## Name
 
