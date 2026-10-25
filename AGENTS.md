@@ -30,6 +30,9 @@ filesystem when possible.
 
 ## Commits
 
+- Follow PUBLICATION.md: run Argus on the working tree and complete history, and install its local Git hooks in each clone.
+- Missing policy, unreadable attachments and unresolved findings block publication. Never bypass hooks or approve exceptions.
+
 - Edit on `main`; do not cut feature branches.
 - After any code change, smoke-test before reporting completion.
 - Push only when the maintainer explicitly asks to push.

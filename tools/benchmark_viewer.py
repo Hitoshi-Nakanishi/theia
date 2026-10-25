@@ -59,7 +59,7 @@ def run(args):
     from theia.app import MainWindow
 
     app = QApplication([])
-    if sys.platform == "win32" and os.environ.get("WINDIR"):
+    if sys.platform == "win32":
         for font in ("arial.ttf", "segoeui.ttf", "meiryo.ttc"):
             QFontDatabase.addApplicationFont(str(Path(os.environ["WINDIR"]) / "Fonts" / font))
     app.setFont(QFont("Arial", 10))

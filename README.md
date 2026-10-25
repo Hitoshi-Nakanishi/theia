@@ -221,6 +221,8 @@ label/period mismatches, corrupt files, zip entries, sorting/export, cancellatio
 
 ## Privacy
 
+Before publishing a checkout or distribution, follow [publication checks](PUBLICATION.md), including the full Git history.
+
 Theia is designed so a public checkout carries no proprietary information:
 
 - It reads only local files and uploads nothing.
