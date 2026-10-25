@@ -1,13 +1,24 @@
 # Theia
 
+[![Native viewer](https://github.com/Hitoshi-Nakanishi/theia/actions/workflows/native-tests.yml/badge.svg)](https://github.com/Hitoshi-Nakanishi/theia/actions/workflows/native-tests.yml)
+[![Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FHitoshi-Nakanishi%2Ftheia%2Fmain%2Fpyproject.toml&query=%24.project.version&label=version)](pyproject.toml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![PySide6](https://img.shields.io/badge/GUI-PySide6-41cd52)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Theia is a fast local desktop viewer for generated Excel valuation models. Open one workbook or a folder of company models,
 inspect assumptions and valuation sheets, and compare the same metrics across companies without launching Excel. Files and
 folders can also be opened from zip archives.
 
-![Theia test screen](docs/assets/theia-screenshot.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/theia-dark.png">
+  <img alt="Theia showing a folder of company models and an operating model sheet" src="docs/assets/theia-light.png">
+</picture>
+
+The sidebar lists the opened folder as collection, folder and company. The tab strip above the sheet switches sheets, the
+address bar shows the selected cell, and the bottom-right controls zoom the whole interface. The screenshots use fictional
+companies in the layout of the bundled demo workbook.
 
 Everything runs locally against files on your own disk. Nothing is uploaded. Excel number formats, including percentages, are
 read directly from `.xlsx` and `.xlsm` workbooks. Optional display metadata can override those formats and speed up loading.
@@ -62,7 +73,7 @@ looked for and offers **Open workbook** and **Open folder**. Files, folders, and
 
 ## Demo Workbook
 
-The repository includes an anonymized workbook for smoke tests and README screenshots:
+The repository includes an anonymized workbook for smoke tests:
 
 ```sh
 task run -- examples/demo_models/0000.T_Demo_Model.xlsx
@@ -81,6 +92,13 @@ holdings.
    comparison column.
 5. Click column headers to sort, filter the results, or export the visible rows in their current order to a UTF-8 CSV.
    Double-click a result to open its source cell.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/theia-compare-dark.png">
+  <img alt="Comparison of revenue, EBITDA margin and free cash flow across seven company workbooks" src="docs/assets/theia-compare-light.png">
+</picture>
+
+Here three cells selected on one company's operating model were read from all seven workbooks in the folder.
 
 Extraction runs in a background thread, opening one workbook at a time and retaining only the extracted values. It reads the
 selected sheet from each workbook; it does not keep all source sheets or create a widget per company. Cancel keeps the results
@@ -136,8 +154,9 @@ python tools/benchmark_viewer.py --prepare --fixture build/benchmark-models
 python tools/benchmark_viewer.py --fixture build/benchmark-models --output build/result.json
 ```
 
-The test workflow covers Windows and macOS. This measurement was taken on Windows; macOS runtime and packaging still need
-verification on a Mac.
+The [Native viewer workflow](.github/workflows/native-tests.yml) runs the tests, builds the package and starts the installed
+viewer on Windows and macOS with Python 3.11 and 3.14 for every push and pull request. This measurement was taken on Windows;
+macOS runtime and packaging still need verification on a Mac.
 
 ## Model Folders
 
